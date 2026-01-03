@@ -1,5 +1,8 @@
 # latent
 
+[![Build](https://github.com/alDuncanson/latent/actions/workflows/build.yml/badge.svg)](https://github.com/alDuncanson/latent/actions/workflows/build.yml)
+[![Release](https://github.com/alDuncanson/latent/actions/workflows/release.yml/badge.svg)](https://github.com/alDuncanson/latent/actions/workflows/release.yml)
+
 A terminal UI for exploring text embeddings. Type text, save embeddings, and visualize semantic relationships in real-time.
 
 ## Requirements
