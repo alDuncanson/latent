@@ -7,51 +7,74 @@ A terminal UI for exploring text embeddings. Type text, save embeddings, and vis
 
 ## Requirements
 
-- [Ollama](https://ollama.ai) with `nomic-embed-text`:
-  ```bash
-  ollama pull nomic-embed-text
-  ollama serve
-  ```
+- [Ollama](https://ollama.ai) running locally with the `nomic-embed-text` model
+- [Qdrant](https://qdrant.tech) vector database
 
-- [Qdrant](https://qdrant.tech) vector database:
-  ```bash
-  docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-  ```
+```bash
+ollama pull nomic-embed-text
+ollama serve
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
 
 ## Install
 
+**Quick install** (Linux/macOS):
+
 ```bash
-go install github.com/yourusername/latent@latest
+curl -sSL https://raw.githubusercontent.com/alDuncanson/latent/main/install.sh | bash
 ```
 
-Or build from source:
+**From release**:
+
+Download the binary for your platform from [Releases](https://github.com/alDuncanson/latent/releases), then:
 
 ```bash
+chmod +x latent-*
+sudo mv latent-* /usr/local/bin/latent
+```
+
+**With Go**:
+
+```bash
+go install github.com/alDuncanson/latent@latest
+```
+
+**From source**:
+
+```bash
+git clone https://github.com/alDuncanson/latent.git
+cd latent
 go build -o latent .
-./latent
+sudo mv latent /usr/local/bin/
 ```
 
-## Controls
+## Usage
 
-| Key | Action |
-|-----|--------|
-| Type | Generate embeddings in real-time |
-| Enter | Save current text and embedding |
-| Tab / Shift+Tab | Cycle through saved points |
-| Up / Down | Navigate saved points |
-| / | Toggle metadata panel |
-| D | Delete selected point |
-| Esc | Quit |
+```bash
+latent           # start the TUI
+latent -version  # print version
+```
 
-## How it works
+---
 
-1. Text is embedded via Ollama as you type (debounced)
-2. Saved embeddings are projected from 768D to 2D using PCA
-3. Similar texts cluster together in the visualization
-4. The metadata panel shows vector stats and nearest neighbors
+<details>
+<summary>Technical Details</summary>
 
-## Symbols
+### How it works
 
-- `●` Current input
-- `○` Saved embedding
-- `◉` Selected point
+1. Text is embedded via Ollama's `/api/embed` endpoint as you type (debounced)
+2. 768-dimensional embeddings are stored in Qdrant via gRPC
+3. PCA (via SVD) projects all saved embeddings to 2D for visualization
+4. Similar texts cluster together; the metadata panel shows nearest neighbors
+
+### Architecture
+
+```
+main.go           Entry point, config, client initialization
+ollama/client.go  HTTP client for Ollama embedding API
+qdrant/client.go  gRPC client using github.com/qdrant/go-client
+projection/pca.go SVD-based dimensionality reduction (768D → 2D)
+tui/model.go      Bubble Tea model with lipgloss rendering
+```
+
+</details>

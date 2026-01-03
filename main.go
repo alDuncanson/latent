@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -11,6 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var version = "dev"
+
 const (
 	ollamaURL      = "http://localhost:11434"
 	ollamaModel    = "nomic-embed-text"
@@ -20,6 +23,14 @@ const (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
+
 	ollamaClient := ollama.NewClient(ollamaURL, ollamaModel)
 
 	qdrantClient, err := qdrant.NewClient(qdrantAddr, collectionName, vectorSize)
