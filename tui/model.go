@@ -416,6 +416,41 @@ func (m Model) findNearestNeighbors(selectedIdx int, k int) []neighbor {
 	return neighbors
 }
 
+func (m Model) findNearestNeighborIndices(selectedIdx int, k int) []int {
+	if selectedIdx < 0 || selectedIdx >= len(m.storedPoints) {
+		return nil
+	}
+
+	selected := m.storedPoints[selectedIdx]
+	type indexedNeighbor struct {
+		idx        int
+		similarity float64
+	}
+	var neighbors []indexedNeighbor
+
+	for i, p := range m.storedPoints {
+		if i == selectedIdx {
+			continue
+		}
+		sim := cosineSimilarity(selected.Vector, p.Vector)
+		neighbors = append(neighbors, indexedNeighbor{idx: i, similarity: sim})
+	}
+
+	sort.Slice(neighbors, func(i, j int) bool {
+		return neighbors[i].similarity > neighbors[j].similarity
+	})
+
+	if len(neighbors) > k {
+		neighbors = neighbors[:k]
+	}
+
+	var indices []int
+	for _, n := range neighbors {
+		indices = append(indices, n.idx)
+	}
+	return indices
+}
+
 func cosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
@@ -471,14 +506,28 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+type canvasCell struct {
+	char       rune
+	style      lipgloss.Style
+	isSelected bool
+	isCurrent  bool
+	isLine     bool
+}
+
 func (m Model) renderCanvas(width, height int) string {
-	grid := make([][]rune, height)
+	grid := make([][]canvasCell, height)
 	for i := range grid {
-		grid[i] = make([]rune, width)
+		grid[i] = make([]canvasCell, width)
 		for j := range grid[i] {
-			grid[i][j] = ' '
+			grid[i][j] = canvasCell{char: ' ', style: lipgloss.NewStyle()}
 		}
 	}
+
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Bold(true)
+	currentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	neighborStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
 
 	if len(m.points) == 0 {
 		centerY := height / 2
@@ -489,7 +538,7 @@ func (m Model) renderCanvas(width, height int) string {
 		}
 		for i, c := range msg {
 			if startX+i < width {
-				grid[centerY][startX+i] = c
+				grid[centerY][startX+i] = canvasCell{char: c, style: lipgloss.NewStyle()}
 			}
 		}
 	} else {
@@ -525,6 +574,7 @@ func (m Model) renderCanvas(width, height int) string {
 
 		type gridPoint struct {
 			y, x       int
+			idx        int
 			label      string
 			isCurrent  bool
 			isSelected bool
@@ -551,36 +601,144 @@ func (m Model) renderCanvas(width, height int) string {
 			isCurrent := i == len(m.points)-1 && strings.HasSuffix(p.Text, " ●")
 			isSelected := i == m.selectedIndex
 
-			marker := '○'
-			if isCurrent {
-				marker = '●'
-			} else if isSelected {
-				marker = '◉'
-			}
-			grid[y][x] = marker
+			gridPoints = append(gridPoints, gridPoint{y: y, x: x, idx: i, label: p.Text, isCurrent: isCurrent, isSelected: isSelected})
+		}
 
-			label := p.Text
-			if len(label) > 12 {
-				label = label[:12]
+		neighborIndices := make(map[int]bool)
+		var selectedGP *gridPoint
+		for i := range gridPoints {
+			if gridPoints[i].isSelected {
+				selectedGP = &gridPoints[i]
+				neighbors := m.findNearestNeighborIndices(m.selectedIndex, 5)
+				for _, ni := range neighbors {
+					neighborIndices[ni] = true
+				}
+				break
 			}
-			labelStart := x + 1
-			for j, c := range label {
-				if labelStart+j < width {
-					grid[y][labelStart+j] = c
+		}
+
+		if selectedGP != nil {
+			for _, gp := range gridPoints {
+				if neighborIndices[gp.idx] {
+					drawLine(grid, selectedGP.x, selectedGP.y, gp.x, gp.y, lineStyle)
+				}
+			}
+		}
+
+		for _, gp := range gridPoints {
+			var marker string
+			var style lipgloss.Style
+
+			if gp.isSelected {
+				marker = "[*]"
+				style = selectedStyle
+			} else if gp.isCurrent {
+				marker = "●"
+				style = currentStyle
+			} else if neighborIndices[gp.idx] {
+				marker = "◆"
+				style = neighborStyle
+			} else {
+				marker = "○"
+				style = normalStyle
+			}
+
+			markerRunes := []rune(marker)
+			startX := gp.x
+			if gp.isSelected {
+				startX = gp.x - 1
+				if startX < 0 {
+					startX = 0
 				}
 			}
 
-			gridPoints = append(gridPoints, gridPoint{y: y, x: x, label: label, isCurrent: isCurrent, isSelected: isSelected})
+			for j, c := range markerRunes {
+				if startX+j < width {
+					grid[gp.y][startX+j] = canvasCell{char: c, style: style, isSelected: gp.isSelected, isCurrent: gp.isCurrent}
+				}
+			}
+
+			label := gp.label
+			if len(label) > 12 {
+				label = label[:12]
+			}
+			labelStart := gp.x + len(markerRunes)
+			if gp.isSelected {
+				labelStart = gp.x + 2
+			}
+			labelStyle := normalStyle
+			if gp.isSelected {
+				labelStyle = selectedStyle
+			} else if neighborIndices[gp.idx] {
+				labelStyle = neighborStyle
+			}
+			for j, c := range label {
+				if labelStart+j < width {
+					grid[gp.y][labelStart+j] = canvasCell{char: c, style: labelStyle}
+				}
+			}
 		}
-		_ = gridPoints
 	}
 
 	var b strings.Builder
 	for i, row := range grid {
-		b.WriteString(string(row))
+		for _, c := range row {
+			b.WriteString(c.style.Render(string(c.char)))
+		}
 		if i < len(grid)-1 {
 			b.WriteString("\n")
 		}
 	}
 	return b.String()
+}
+
+func drawLine(grid [][]canvasCell, x0, y0, x1, y1 int, style lipgloss.Style) {
+	dx := abs(x1 - x0)
+	dy := abs(y1 - y0)
+	sx := 1
+	if x0 > x1 {
+		sx = -1
+	}
+	sy := 1
+	if y0 > y1 {
+		sy = -1
+	}
+	err := dx - dy
+
+	for {
+		if y0 >= 0 && y0 < len(grid) && x0 >= 0 && x0 < len(grid[0]) {
+			if grid[y0][x0].char == ' ' {
+				lineChar := '·'
+				if dx > dy*2 {
+					lineChar = '─'
+				} else if dy > dx*2 {
+					lineChar = '│'
+				} else if (sx > 0 && sy > 0) || (sx < 0 && sy < 0) {
+					lineChar = '╲'
+				} else {
+					lineChar = '╱'
+				}
+				grid[y0][x0] = canvasCell{char: lineChar, style: style, isLine: true}
+			}
+		}
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x0 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
