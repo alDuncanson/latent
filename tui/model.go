@@ -32,6 +32,7 @@ type Model struct {
 	savedTexts     []string
 	selectedIndex  int
 	showMetadata   bool
+	version        string
 }
 
 type embeddingResult struct {
@@ -44,7 +45,7 @@ type pointsUpdated struct {
 	storedPoints []qdrant.Point
 }
 
-func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client) Model {
+func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client, version string) Model {
 	return Model{
 		ollama:        ollamaClient,
 		qdrant:        qdrantClient,
@@ -52,6 +53,7 @@ func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client) Model {
 		height:        24,
 		selectedIndex: -1,
 		showMetadata:  true,
+		version:       version,
 	}
 }
 
@@ -333,7 +335,13 @@ func (m Model) View() string {
 		b.WriteString(errStyle.Render("Error: "+m.err.Error()) + "\n")
 	}
 
-	b.WriteString(helpStyle.Render("Up/Down: select | /: metadata | D: delete | Enter: save | Esc: quit"))
+	help := "Up/Down: select | /: metadata | D: delete | Enter: save | Esc: quit"
+	versionLabel := m.version
+	padding := totalWidth - len(help) - len(versionLabel)
+	if padding < 1 {
+		padding = 1
+	}
+	b.WriteString(helpStyle.Render(help + strings.Repeat(" ", padding) + versionLabel))
 
 	return lipgloss.NewStyle().Padding(1, margin).Render(b.String())
 }
