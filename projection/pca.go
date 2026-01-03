@@ -59,14 +59,14 @@ func ProjectTo2D(vectors [][]float32, texts []string) []Point2D {
 	svd.VTo(&vt)
 
 	vtr, vtc := vt.Dims()
-	if vtr < 2 || vtc < dim {
+	if vtr < dim || vtc < 2 {
 		return fallbackProjection(vectors, texts)
 	}
 
 	pc := mat.NewDense(dim, 2, nil)
-	for i := 0; i < dim && i < vtc; i++ {
-		pc.Set(i, 0, vt.At(0, i))
-		pc.Set(i, 1, vt.At(1, i))
+	for i := 0; i < dim; i++ {
+		pc.Set(i, 0, vt.At(i, 0))
+		pc.Set(i, 1, vt.At(i, 1))
 	}
 
 	var projected mat.Dense
