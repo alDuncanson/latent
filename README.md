@@ -3,7 +3,9 @@
 [![Build](https://github.com/alDuncanson/latent/actions/workflows/build.yml/badge.svg)](https://github.com/alDuncanson/latent/actions/workflows/build.yml)
 [![Release](https://github.com/alDuncanson/latent/actions/workflows/release.yml/badge.svg)](https://github.com/alDuncanson/latent/actions/workflows/release.yml)
 
-A terminal UI for exploring text embeddings. Type text, watch it get embedded into 768-dimensional vectors via [Ollama](https://ollama.ai)'s `nomic-embed-text` model, and save points to a local [Qdrant](https://qdrant.tech) database. PCA projects stored embeddings down to 2D for real-time visualization—similar texts cluster together, and a metadata panel shows nearest neighbors.
+Peer into latent space.
+
+Terminal UI for text embedding visualization. Embeds text into 768-dimensional vectors via [Ollama](https://ollama.ai)'s `nomic-embed-text`, persists them to a local [Qdrant](https://qdrant.tech) vector database, and projects the collection to 2D via PCA. Semantically similar texts cluster spatially; nearest neighbors surface in a metadata panel.
 
 ## Prerequisites
 

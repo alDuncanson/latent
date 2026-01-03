@@ -1,6 +1,6 @@
 # latent
 
-TUI for visualizing text embeddings using Ollama and Qdrant.
+Peer into latent space. Terminal UI for text embedding visualization—embeds via Ollama, persists to Qdrant, projects to 2D via PCA.
 
 ## Commands
 
