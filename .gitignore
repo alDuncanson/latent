@@ -1,0 +1,21 @@
+# Binary
+latent
+viz
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+*.test
+coverage.out
+
+# Vendor (if not committed)
+# vendor/
