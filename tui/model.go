@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"latent/ollama"
-	"latent/projection"
-	"latent/qdrant"
+	"github.com/alDuncanson/latent/ollama"
+	"github.com/alDuncanson/latent/projection"
+	"github.com/alDuncanson/latent/qdrant"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

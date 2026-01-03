@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"latent/ollama"
-	"latent/preload"
-	"latent/qdrant"
-	"latent/tui"
+	"github.com/alDuncanson/latent/ollama"
+	"github.com/alDuncanson/latent/preload"
+	"github.com/alDuncanson/latent/qdrant"
+	"github.com/alDuncanson/latent/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"

@@ -1,4 +1,4 @@
-module latent
+module github.com/alDuncanson/latent
 
 go 1.25.5
 
