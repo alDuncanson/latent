@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/alDuncanson/latent/dataimport"
+	"github.com/alDuncanson/latent/huggingface"
 	"github.com/alDuncanson/latent/ollama"
 	"github.com/alDuncanson/latent/preload"
 	"github.com/alDuncanson/latent/qdrant"
@@ -45,6 +46,10 @@ func main() {
 	// Parse command-line flags for version display and demo data preloading
 	showVersionFlag := flag.Bool("version", false, "print version and exit")
 	preloadDemoDataFlag := flag.Bool("preload", false, "seed with demo word list")
+	hfDatasetFlag := flag.String("hf-dataset", "", "Hugging Face dataset to import (e.g., cornell-movie-review-data/rotten_tomatoes)")
+	hfSplitFlag := flag.String("hf-split", "train", "dataset split to use (default: train)")
+	hfColumnFlag := flag.String("hf-column", "text", "column containing text to embed (default: text)")
+	hfMaxRowsFlag := flag.Int("hf-max-rows", 100, "maximum rows to fetch from Hugging Face (default: 100)")
 	flag.Parse()
 
 	// Handle version flag: print version and exit early
@@ -89,6 +94,22 @@ func main() {
 		importError := runImportDataset(ollamaEmbeddingClient, qdrantVectorClient, datasetPath)
 		if importError != nil {
 			fmt.Fprintf(os.Stderr, "Import failed: %v\n", importError)
+			os.Exit(1)
+		}
+	}
+
+	// If a Hugging Face dataset was specified, fetch and import it
+	if *hfDatasetFlag != "" {
+		importError := runImportHuggingFace(
+			ollamaEmbeddingClient,
+			qdrantVectorClient,
+			*hfDatasetFlag,
+			*hfSplitFlag,
+			*hfColumnFlag,
+			*hfMaxRowsFlag,
+		)
+		if importError != nil {
+			fmt.Fprintf(os.Stderr, "Hugging Face import failed: %v\n", importError)
 			os.Exit(1)
 		}
 	}
@@ -174,4 +195,65 @@ func truncateForProgress(text string, maxLen int) string {
 		return text
 	}
 	return text[:maxLen-3] + "..."
+}
+
+// runImportHuggingFace fetches texts from a Hugging Face dataset and embeds them into Qdrant.
+func runImportHuggingFace(ollamaEmbeddingClient *ollama.Client, qdrantVectorClient *qdrant.Client, dataset, split, column string, maxRows int) error {
+	hfClient := huggingface.NewClient()
+
+	// First, get splits to determine the config
+	splits, splitsError := hfClient.GetSplits(dataset)
+	if splitsError != nil {
+		return fmt.Errorf("fetching splits: %w", splitsError)
+	}
+
+	if len(splits.Splits) == 0 {
+		return fmt.Errorf("no splits found for dataset %s", dataset)
+	}
+
+	// Find the matching split and get its config
+	var config string
+	for _, s := range splits.Splits {
+		if s.Split == split {
+			config = s.Config
+			break
+		}
+	}
+	if config == "" {
+		config = splits.Splits[0].Config
+		split = splits.Splits[0].Split
+		fmt.Printf("Split not found, using %s/%s\n", config, split)
+	}
+
+	fmt.Printf("Fetching from Hugging Face: %s (config=%s, split=%s, column=%s)\n", dataset, config, split, column)
+
+	texts, fetchError := hfClient.FetchTexts(dataset, config, split, column, maxRows)
+	if fetchError != nil {
+		return fmt.Errorf("fetching texts: %w", fetchError)
+	}
+
+	if len(texts) == 0 {
+		return fmt.Errorf("no texts found in column %q", column)
+	}
+
+	backgroundContext := context.Background()
+	fmt.Printf("Importing %d texts...\n", len(texts))
+
+	for textIndex, currentText := range texts {
+		embeddingVector, embeddingError := ollamaEmbeddingClient.Embed(currentText)
+		if embeddingError != nil {
+			return fmt.Errorf("embed %q: %w", truncateForProgress(currentText, 20), embeddingError)
+		}
+
+		uniquePointIdentifier := uuid.New().String()
+		upsertError := qdrantVectorClient.Upsert(backgroundContext, uniquePointIdentifier, currentText, embeddingVector)
+		if upsertError != nil {
+			return fmt.Errorf("upsert: %w", upsertError)
+		}
+
+		fmt.Printf("\r[%d/%d] %s", textIndex+1, len(texts), truncateForProgress(currentText, 40))
+	}
+
+	fmt.Println("\nDone.")
+	return nil
 }
