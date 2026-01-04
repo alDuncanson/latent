@@ -168,12 +168,16 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return model.handleBackspace()
 
 	case "left":
-		if model.cursorPos > 0 {
+		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
+			model.selectPreviousInNeighborhood()
+		} else if model.cursorPos > 0 {
 			model.cursorPos--
 		}
 
 	case "right":
-		if model.cursorPos < len(model.input) {
+		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
+			model.selectNextInNeighborhood()
+		} else if model.cursorPos < len(model.input) {
 			model.cursorPos++
 		}
 
@@ -250,6 +254,59 @@ func (model *Model) selectPreviousPoint() {
 	}
 }
 
+// getNeighborhoodIndices returns the selected point index followed by its neighbor indices.
+func (model *Model) getNeighborhoodIndices() []int {
+	if model.selectedIndex < 0 || model.selectedIndex >= len(model.storedPoints) {
+		return nil
+	}
+	neighborIndices := model.findNearestNeighborIndices(model.selectedIndex, 5)
+	// Build list: selected point first, then neighbors
+	neighborhood := []int{model.selectedIndex}
+	neighborhood = append(neighborhood, neighborIndices...)
+	return neighborhood
+}
+
+// selectNextInNeighborhood cycles forward through the selected point and its neighbors.
+func (model *Model) selectNextInNeighborhood() {
+	neighborhood := model.getNeighborhoodIndices()
+	if len(neighborhood) == 0 {
+		return
+	}
+	// Find current position in neighborhood
+	currentPos := -1
+	for i, idx := range neighborhood {
+		if idx == model.selectedIndex {
+			currentPos = i
+			break
+		}
+	}
+	// Move to next in neighborhood
+	nextPos := (currentPos + 1) % len(neighborhood)
+	model.selectedIndex = neighborhood[nextPos]
+}
+
+// selectPreviousInNeighborhood cycles backward through the selected point and its neighbors.
+func (model *Model) selectPreviousInNeighborhood() {
+	neighborhood := model.getNeighborhoodIndices()
+	if len(neighborhood) == 0 {
+		return
+	}
+	// Find current position in neighborhood
+	currentPos := -1
+	for i, idx := range neighborhood {
+		if idx == model.selectedIndex {
+			currentPos = i
+			break
+		}
+	}
+	// Move to previous in neighborhood
+	prevPos := currentPos - 1
+	if prevPos < 0 {
+		prevPos = len(neighborhood) - 1
+	}
+	model.selectedIndex = neighborhood[prevPos]
+}
+
 // handleCharacterInput inserts a typed character at the cursor position.
 func (model Model) handleCharacterInput(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyString := keyMessage.String()
@@ -272,6 +329,10 @@ func (model Model) handleEmbeddingResult(result embeddingResult) (tea.Model, tea
 	model.err = nil
 	if model.currentVec != nil {
 		return model, model.updateVisualization()
+	}
+	// Input was cleared - reproject without the current vector to remove stale point
+	if model.input == "" {
+		return model, model.reproject()
 	}
 	return model, nil
 }
@@ -434,7 +495,7 @@ func (model Model) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	inputBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
-	canvasBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+	canvasBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("208"))
 	metadataBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
 
 	var outputBuilder strings.Builder
@@ -496,7 +557,7 @@ func (model Model) View() string {
 	if model.useUMAP {
 		projectionMethod = "UMAP"
 	}
-	help := "Up/Down: select | /: metadata | F: focus | P: " + projectionMethod + " | D: delete | Enter: save | Esc: quit"
+	help := "Up/Down: select | Left/Right: neighbors | /: metadata | F: focus | P: " + projectionMethod + " | D: delete | Enter: save | Esc: quit"
 	versionLabel := model.version
 	padding := totalWidth - len(help) - len(versionLabel)
 	if padding < 1 {
