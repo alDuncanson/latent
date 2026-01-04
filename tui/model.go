@@ -148,6 +148,9 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		model.showMetadata = !model.showMetadata
 
+	case "F":
+		model.focusMode = !model.focusMode
+
 	case "D":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
 			return model, model.deleteSelected()
