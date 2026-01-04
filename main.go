@@ -52,7 +52,7 @@ func main() {
 		}
 	}
 
-	model := tui.NewModel(ollamaClient, qdrantClient)
+	model := tui.NewModel(ollamaClient, qdrantClient, version)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
