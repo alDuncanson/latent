@@ -1,6 +1,7 @@
 # latent
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/alDuncanson/latent)](https://go.dev/)
+[![Version](https://img.shields.io/github/v/release/alDuncanson/latent)](https://github.com/alDuncanson/latent/releases)
 [![Build](https://github.com/alDuncanson/latent/actions/workflows/build.yml/badge.svg)](https://github.com/alDuncanson/latent/actions/workflows/build.yml)
 [![Release](https://github.com/alDuncanson/latent/actions/workflows/release.yml/badge.svg)](https://github.com/alDuncanson/latent/actions/workflows/release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/alDuncanson/latent)](https://goreportcard.com/report/github.com/alDuncanson/latent)
@@ -63,12 +64,12 @@ latent --hf-dataset imdb --hf-split test --hf-max-rows 50
 latent --hf-dataset squad --hf-column question --hf-max-rows 200
 ```
 
-| Flag            | Default   | Description                          |
-| --------------- | --------- | ------------------------------------ |
-| `--hf-dataset`  |           | Dataset name (e.g., `imdb`, `squad`) |
-| `--hf-split`    | `train`   | Dataset split to use                 |
-| `--hf-column`   | `text`    | Column containing text to embed      |
-| `--hf-max-rows` | `100`     | Maximum rows to fetch                |
+| Flag            | Default | Description                          |
+| --------------- | ------- | ------------------------------------ |
+| `--hf-dataset`  |         | Dataset name (e.g., `imdb`, `squad`) |
+| `--hf-split`    | `train` | Dataset split to use                 |
+| `--hf-column`   | `text`  | Column containing text to embed      |
+| `--hf-max-rows` | `100`   | Maximum rows to fetch                |
 
 ### Local File Import
 
@@ -130,5 +131,3 @@ Clustering works best with:
 Datasets with semantically similar terms (e.g., all physics terms) may produce
 fewer clusters since the points are spread evenly rather than forming dense
 pockets.
-
-
