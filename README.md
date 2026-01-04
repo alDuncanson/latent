@@ -5,7 +5,14 @@
 
 Peer into latent space.
 
-Terminal UI for text embedding visualization. Embeds text into 768-dimensional vectors via [Ollama](https://ollama.ai)'s `nomic-embed-text`, persists them to a local [Qdrant](https://qdrant.tech) vector database, and projects the collection to 2D via PCA. Semantically similar texts cluster spatially; nearest neighbors surface in a metadata panel.
+![demo](assets/demo.gif)
+
+Terminal UI for text embedding visualization. Embeds text into 768-dimensional
+vectors via [Ollama](https://ollama.ai)'s `nomic-embed-text`, persists them to a
+local [Qdrant](https://qdrant.tech) vector database, and projects the collection
+into two-dimensional Euclidean space using principal component analysis.
+Semantically similar texts cluster spatially; nearest neighbors surface in a
+metadata panel.
 
 ## Prerequisites
 
