@@ -34,6 +34,7 @@ type Model struct {
 	selectedIndex  int
 	showMetadata   bool
 	focusMode      bool
+	useUMAP        bool
 	version        string
 }
 
@@ -67,9 +68,18 @@ func (model Model) Init() tea.Cmd {
 	return model.loadPoints()
 }
 
+// projectPoints projects embedding vectors to 2D using the current projection method (PCA or UMAP).
+func (model *Model) projectPoints(embeddingVectors [][]float32, textLabels []string) []projection.Point2D {
+	if model.useUMAP {
+		return projection.ProjectTo2DUMAP(embeddingVectors, textLabels)
+	}
+	return projection.ProjectTo2D(embeddingVectors, textLabels)
+}
+
 // loadPoints fetches all stored embeddings from Qdrant and projects them to 2D coordinates.
 func (model *Model) loadPoints() tea.Cmd {
 	qdrantClient := model.qdrant
+	useUMAP := model.useUMAP
 	return func() tea.Msg {
 		ctx := context.Background()
 		storedPoints, err := qdrantClient.GetAll(ctx)
@@ -86,8 +96,42 @@ func (model *Model) loadPoints() tea.Cmd {
 		}
 
 		// Project high-dimensional vectors to 2D for visualization
-		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		var projectedPoints []projection.Point2D
+		if useUMAP {
+			projectedPoints = projection.ProjectTo2DUMAP(embeddingVectors, textLabels)
+		} else {
+			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
+		}
 		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
+	}
+}
+
+// reproject recalculates the 2D projection with the current projection method.
+func (model *Model) reproject() tea.Cmd {
+	storedPoints := model.storedPoints
+	currentVector := model.currentVec
+	currentInput := model.input
+	useUMAP := model.useUMAP
+	return func() tea.Msg {
+		var embeddingVectors [][]float32
+		var textLabels []string
+		for _, storedPoint := range storedPoints {
+			embeddingVectors = append(embeddingVectors, storedPoint.Vector)
+			textLabels = append(textLabels, storedPoint.Text)
+		}
+
+		if currentVector != nil {
+			embeddingVectors = append(embeddingVectors, currentVector)
+			textLabels = append(textLabels, currentInput+" ●")
+		}
+
+		var projectedPoints []projection.Point2D
+		if useUMAP {
+			projectedPoints = projection.ProjectTo2DUMAP(embeddingVectors, textLabels)
+		} else {
+			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
+		}
+		return pointsUpdated{points: projectedPoints}
 	}
 }
 
@@ -150,6 +194,10 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "F":
 		model.focusMode = !model.focusMode
+
+	case "P":
+		model.useUMAP = !model.useUMAP
+		return model, model.reproject()
 
 	case "D":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
@@ -269,6 +317,7 @@ func (model *Model) saveCurrentEmbedding() tea.Cmd {
 	textToSave := model.input
 	vectorToSave := model.currentVec
 	qdrantClient := model.qdrant
+	useUMAP := model.useUMAP
 	return func() tea.Msg {
 		ctx := context.Background()
 		pointID := uuid.New().String()
@@ -290,7 +339,12 @@ func (model *Model) saveCurrentEmbedding() tea.Cmd {
 			textLabels = append(textLabels, storedPoint.Text)
 		}
 
-		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		var projectedPoints []projection.Point2D
+		if useUMAP {
+			projectedPoints = projection.ProjectTo2DUMAP(embeddingVectors, textLabels)
+		} else {
+			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
+		}
 		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
 	}
 }
@@ -302,6 +356,7 @@ func (model *Model) deleteSelected() tea.Cmd {
 	}
 	pointIDToDelete := model.storedPoints[model.selectedIndex].ID
 	qdrantClient := model.qdrant
+	useUMAP := model.useUMAP
 	return func() tea.Msg {
 		ctx := context.Background()
 		if err := qdrantClient.Delete(ctx, pointIDToDelete); err != nil {
@@ -322,7 +377,12 @@ func (model *Model) deleteSelected() tea.Cmd {
 			textLabels = append(textLabels, storedPoint.Text)
 		}
 
-		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		var projectedPoints []projection.Point2D
+		if useUMAP {
+			projectedPoints = projection.ProjectTo2DUMAP(embeddingVectors, textLabels)
+		} else {
+			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
+		}
 		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
 	}
 }
@@ -332,6 +392,7 @@ func (model *Model) updateVisualization() tea.Cmd {
 	qdrantClient := model.qdrant
 	currentVector := model.currentVec
 	currentInput := model.input
+	useUMAP := model.useUMAP
 	return func() tea.Msg {
 		ctx := context.Background()
 		storedPoints, err := qdrantClient.GetAll(ctx)
@@ -353,7 +414,12 @@ func (model *Model) updateVisualization() tea.Cmd {
 			textLabels = append(textLabels, currentInput+" ●")
 		}
 
-		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		var projectedPoints []projection.Point2D
+		if useUMAP {
+			projectedPoints = projection.ProjectTo2DUMAP(embeddingVectors, textLabels)
+		} else {
+			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
+		}
 		return pointsUpdated{points: projectedPoints}
 	}
 }
@@ -426,7 +492,11 @@ func (model Model) View() string {
 		outputBuilder.WriteString(errorStyle.Render("Error: "+model.err.Error()) + "\n")
 	}
 
-	help := "Up/Down: select | /: metadata | F: focus | D: delete | Enter: save | Esc: quit"
+	projectionMethod := "PCA"
+	if model.useUMAP {
+		projectionMethod = "UMAP"
+	}
+	help := "Up/Down: select | /: metadata | F: focus | P: " + projectionMethod + " | D: delete | Enter: save | Esc: quit"
 	versionLabel := model.version
 	padding := totalWidth - len(help) - len(versionLabel)
 	if padding < 1 {
