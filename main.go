@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/alDuncanson/latent/dataimport"
 	"github.com/alDuncanson/latent/ollama"
 	"github.com/alDuncanson/latent/preload"
 	"github.com/alDuncanson/latent/qdrant"
@@ -52,6 +53,12 @@ func main() {
 		return
 	}
 
+	// Check for positional argument (dataset file to import)
+	var datasetPath string
+	if flag.NArg() > 0 {
+		datasetPath = flag.Arg(0)
+	}
+
 	// Initialize the Ollama client for generating text embeddings
 	ollamaEmbeddingClient := ollama.NewClient(ollamaServiceURL, embeddingModelName)
 
@@ -73,6 +80,15 @@ func main() {
 		preloadError := runPreloadDemoWords(ollamaEmbeddingClient, qdrantVectorClient)
 		if preloadError != nil {
 			fmt.Fprintf(os.Stderr, "Preload failed: %v\n", preloadError)
+			os.Exit(1)
+		}
+	}
+
+	// If a dataset path was provided, import it
+	if datasetPath != "" {
+		importError := runImportDataset(ollamaEmbeddingClient, qdrantVectorClient, datasetPath)
+		if importError != nil {
+			fmt.Fprintf(os.Stderr, "Import failed: %v\n", importError)
 			os.Exit(1)
 		}
 	}
@@ -118,4 +134,44 @@ func runPreloadDemoWords(ollamaEmbeddingClient *ollama.Client, qdrantVectorClien
 
 	fmt.Println("\nDone.")
 	return nil
+}
+
+// runImportDataset loads texts from a CSV or JSON file and embeds them into Qdrant.
+func runImportDataset(ollamaEmbeddingClient *ollama.Client, qdrantVectorClient *qdrant.Client, datasetPath string) error {
+	texts, loadError := dataimport.LoadTexts(datasetPath)
+	if loadError != nil {
+		return fmt.Errorf("loading dataset: %w", loadError)
+	}
+
+	if len(texts) == 0 {
+		return fmt.Errorf("no texts found in dataset")
+	}
+
+	backgroundContext := context.Background()
+	fmt.Printf("Importing %d texts from %s...\n", len(texts), datasetPath)
+
+	for textIndex, currentText := range texts {
+		embeddingVector, embeddingError := ollamaEmbeddingClient.Embed(currentText)
+		if embeddingError != nil {
+			return fmt.Errorf("embed %q: %w", currentText, embeddingError)
+		}
+
+		uniquePointIdentifier := uuid.New().String()
+		upsertError := qdrantVectorClient.Upsert(backgroundContext, uniquePointIdentifier, currentText, embeddingVector)
+		if upsertError != nil {
+			return fmt.Errorf("upsert %q: %w", currentText, upsertError)
+		}
+
+		fmt.Printf("\r[%d/%d] %s", textIndex+1, len(texts), truncateForProgress(currentText, 40))
+	}
+
+	fmt.Println("\nDone.")
+	return nil
+}
+
+func truncateForProgress(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen-3] + "..."
 }

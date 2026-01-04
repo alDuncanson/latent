@@ -46,5 +46,59 @@ go install github.com/alDuncanson/latent@latest
 ## Usage
 
 ```bash
-latent
+latent                    # Start the TUI
+latent dataset.csv        # Import texts from CSV then start TUI
+latent dataset.json       # Import texts from JSON then start TUI
+latent --preload          # Seed with demo word list
+latent --version          # Print version
 ```
+
+### Batch Import
+
+Import many texts at once from CSV or JSON files:
+
+**CSV format** - requires a `text` column header:
+
+```csv
+text
+hello world
+machine learning
+neural networks
+```
+
+**JSON format** - array of strings or objects:
+
+```json
+["hello world", "machine learning", "neural networks"]
+```
+
+or
+
+```json
+[{ "text": "hello world" }, { "text": "machine learning" }]
+```
+
+### Keyboard Controls
+
+| Key          | Action                                              |
+| ------------ | --------------------------------------------------- |
+| `Up/Down`    | Select previous/next point                          |
+| `Left/Right` | Navigate among nearest neighbors                    |
+| `Tab`        | Cycle through points                                |
+| `/`          | Toggle metadata panel                               |
+| `F`          | Toggle focus mode (show only selected + neighbors)  |
+| `P`          | Toggle projection method (PCA / UMAP)               |
+| `C`          | Toggle HDBSCAN clustering (color points by cluster) |
+| `D`          | Delete selected point                               |
+| `Enter`      | Save current input as embedding                     |
+| `Esc`        | Quit                                                |
+
+### Clustering
+
+Press `C` to enable automatic cluster detection using HDBSCAN (Hierarchical
+Density-Based Spatial Clustering of Applications with Noise). Points are colored
+by their cluster assignment, with noise points shown in gray. The metadata panel
+shows the cluster ID for the selected point.
+
+HDBSCAN finds clusters of varying densities and automatically determines the
+number of clusters—no need to specify k as with k-means.
