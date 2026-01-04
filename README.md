@@ -11,21 +11,7 @@ Peer into latent space.
 
 ![demo](assets/demo.gif)
 
-A terminal UI for visualizing high-dimensional embedding vectors through
-dimensionality reduction. Latent explores the structure of vector embeddings by
-projecting them from their native high-dimensional space onto a two-dimensional
-manifold, revealing clusters and relationships that emerge from semantic
-similarity.
-
-Supports multiple projection methods including principal component analysis
-(PCA) via singular value decomposition for fast linear projections, and UMAP
-(Uniform Manifold Approximation and Projection) for nonlinear dimensionality
-reduction that better preserves local and global topological structure.
-
-Currently supports text embeddings via [Ollama](https://ollama.ai)'s
-`nomic-embed-text` model, with vectors persisted to a local
-[Qdrant](https://qdrant.tech) vector database. Nearest neighbors surface in a
-metadata panel for interactive exploration.
+Terminal UI for visualizing high-dimensional text embeddings via dimensionality reduction. Embeds text using [Ollama](https://ollama.ai)'s `nomic-embed-text` model (768D vectors), persists to [Qdrant](https://qdrant.tech) vector database over gRPC, and projects to 2D using PCA (SVD-based) or UMAP for nonlinear manifold approximation. Clustering via HDBSCAN reveals semantic structure without specifying k. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lipgloss](https://github.com/charmbracelet/lipgloss).
 
 ## Prerequisites
 
@@ -47,87 +33,17 @@ go install github.com/alDuncanson/latent@latest
 ## Usage
 
 ```bash
-latent                    # Start the TUI
-latent dataset.csv        # Import texts from CSV then start TUI
-latent dataset.json       # Import texts from JSON then start TUI
+latent                    # Start TUI
+latent dataset.csv        # Import from CSV (requires `text` column)
+latent dataset.json       # Import from JSON (array of strings or {text: ...} objects)
 latent --preload          # Seed with demo word list
-latent --version          # Print version
 ```
 
 ### Hugging Face Datasets
 
-Import datasets directly from Hugging Face using the Dataset Viewer API:
-
 ```bash
-latent --hf-dataset cornell-movie-review-data/rotten_tomatoes
-latent --hf-dataset imdb --hf-split test --hf-max-rows 50
-latent --hf-dataset squad --hf-column question --hf-max-rows 200
+latent --hf-dataset stanfordnlp/imdb --hf-split test --hf-max-rows 50
+latent --hf-dataset rajpurkar/squad --hf-column question --hf-max-rows 200
 ```
 
-| Flag            | Default | Description                          |
-| --------------- | ------- | ------------------------------------ |
-| `--hf-dataset`  |         | Dataset name (e.g., `imdb`, `squad`) |
-| `--hf-split`    | `train` | Dataset split to use                 |
-| `--hf-column`   | `text`  | Column containing text to embed      |
-| `--hf-max-rows` | `100`   | Maximum rows to fetch                |
-
-### Local File Import
-
-Import texts from local CSV or JSON files:
-
-**CSV format** - requires a `text` column header:
-
-```csv
-text
-hello world
-machine learning
-neural networks
-```
-
-**JSON format** - array of strings or objects:
-
-```json
-["hello world", "machine learning", "neural networks"]
-```
-
-or
-
-```json
-[{ "text": "hello world" }, { "text": "machine learning" }]
-```
-
-### Keyboard Controls
-
-| Key          | Action                                              |
-| ------------ | --------------------------------------------------- |
-| `Up/Down`    | Select previous/next point                          |
-| `Left/Right` | Navigate among nearest neighbors                    |
-| `Tab`        | Cycle through points                                |
-| `/`          | Toggle metadata panel                               |
-| `F`          | Toggle focus mode (show only selected + neighbors)  |
-| `P`          | Toggle projection method (PCA / UMAP)               |
-| `C`          | Toggle HDBSCAN clustering (color points by cluster) |
-| `D`          | Delete selected point                               |
-| `Enter`      | Save current input as embedding                     |
-| `Esc`        | Quit                                                |
-
-### Clustering
-
-Press `C` to enable automatic cluster detection using HDBSCAN (Hierarchical
-Density-Based Spatial Clustering of Applications with Noise). Points are colored
-by their cluster assignment, with noise points shown in gray. The metadata panel
-shows the cluster ID for the selected point.
-
-HDBSCAN finds clusters of varying densities and automatically determines the
-number of clusters—no need to specify k as with k-means.
-
-Clustering works best with:
-
-- **Diverse categories** - distinct semantic groups (colors vs animals vs
-  emotions) create natural separation in embedding space
-- **Sufficient density** - each category needs multiple terms to form dense
-  regions that HDBSCAN can detect
-
-Datasets with semantically similar terms (e.g., all physics terms) may produce
-fewer clusters since the points are spread evenly rather than forming dense
-pockets.
+Flags: `--hf-dataset`, `--hf-split` (default: train), `--hf-column` (default: text), `--hf-max-rows` (default: 100)
