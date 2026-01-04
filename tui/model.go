@@ -531,11 +531,13 @@ func (m Model) renderCanvas(width, height int) string {
 		}
 	}
 
-	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Bold(true)
-	currentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	neighborStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
+	selectedDotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)   // Orange for selected dot
+	selectedLabelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("118")).Bold(true) // Green for selected word
+	currentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213"))                  // Pink for current input
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))                   // Dim gray for unselected
+	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117"))                     // Light blue for connector dots
+	neighborDotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)   // Pink for neighbor dots
+	neighborLabelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true) // Yellow for neighbor words
 
 	if len(m.points) == 0 {
 		centerY := height / 2
@@ -633,22 +635,44 @@ func (m Model) renderCanvas(width, height int) string {
 			}
 		}
 
+		// Sort so highlighted points render on top (last): unselected first, then neighbors, then current, then selected
+		sort.SliceStable(gridPoints, func(i, j int) bool {
+			priorityOf := func(gp gridPoint) int {
+				if gp.isSelected {
+					return 3
+				}
+				if gp.isCurrent {
+					return 2
+				}
+				if neighborIndices[gp.idx] {
+					return 1
+				}
+				return 0
+			}
+			return priorityOf(gridPoints[i]) < priorityOf(gridPoints[j])
+		})
+
 		for _, gp := range gridPoints {
 			var marker string
-			var style lipgloss.Style
+			var markerStyle lipgloss.Style
+			var labelStyle lipgloss.Style
 
 			if gp.isSelected {
 				marker = "[*]"
-				style = selectedStyle
+				markerStyle = selectedDotStyle
+				labelStyle = selectedLabelStyle
 			} else if gp.isCurrent {
 				marker = "●"
-				style = currentStyle
+				markerStyle = currentStyle
+				labelStyle = currentStyle
 			} else if neighborIndices[gp.idx] {
 				marker = "◆"
-				style = neighborStyle
+				markerStyle = neighborDotStyle
+				labelStyle = neighborLabelStyle
 			} else {
 				marker = "○"
-				style = normalStyle
+				markerStyle = normalStyle
+				labelStyle = normalStyle
 			}
 
 			markerRunes := []rune(marker)
@@ -662,7 +686,7 @@ func (m Model) renderCanvas(width, height int) string {
 
 			for j, c := range markerRunes {
 				if startX+j < width {
-					grid[gp.y][startX+j] = canvasCell{char: c, style: style, isSelected: gp.isSelected, isCurrent: gp.isCurrent}
+					grid[gp.y][startX+j] = canvasCell{char: c, style: markerStyle, isSelected: gp.isSelected, isCurrent: gp.isCurrent}
 				}
 			}
 
@@ -670,15 +694,9 @@ func (m Model) renderCanvas(width, height int) string {
 			if len(label) > 12 {
 				label = label[:12]
 			}
-			labelStart := gp.x + len(markerRunes)
+			labelStart := gp.x + len(markerRunes) + 1
 			if gp.isSelected {
-				labelStart = gp.x + 2
-			}
-			labelStyle := normalStyle
-			if gp.isSelected {
-				labelStyle = selectedStyle
-			} else if neighborIndices[gp.idx] {
-				labelStyle = neighborStyle
+				labelStart = gp.x + 3
 			}
 			for j, c := range label {
 				if labelStart+j < width {
@@ -716,17 +734,7 @@ func drawLine(grid [][]canvasCell, x0, y0, x1, y1 int, style lipgloss.Style) {
 	for {
 		if y0 >= 0 && y0 < len(grid) && x0 >= 0 && x0 < len(grid[0]) {
 			if grid[y0][x0].char == ' ' {
-				lineChar := '·'
-				if dx > dy*2 {
-					lineChar = '─'
-				} else if dy > dx*2 {
-					lineChar = '│'
-				} else if (sx > 0 && sy > 0) || (sx < 0 && sy < 0) {
-					lineChar = '╲'
-				} else {
-					lineChar = '╱'
-				}
-				grid[y0][x0] = canvasCell{char: lineChar, style: style, isLine: true}
+				grid[y0][x0] = canvasCell{char: '·', style: style, isLine: true}
 			}
 		}
 		if x0 == x1 && y0 == y1 {
