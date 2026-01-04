@@ -10,13 +10,21 @@ Peer into latent space.
 
 ![demo](assets/demo.gif)
 
-Terminal UI for text embedding visualization. Embeds text into 768-dimensional
-vectors via [Ollama](https://ollama.ai)'s `nomic-embed-text`, persists them to a
-local [Qdrant](https://qdrant.tech) vector database, and projects the collection
-into two-dimensional Euclidean space using principal component analysis via
-singular value decomposition.
-Semantically similar texts cluster spatially; nearest neighbors surface in a
-metadata panel.
+A terminal UI for visualizing high-dimensional embedding vectors through
+dimensionality reduction. Latent explores the structure of vector embeddings by
+projecting them from their native high-dimensional space onto a two-dimensional
+manifold, revealing clusters and relationships that emerge from semantic
+similarity.
+
+Supports multiple projection methods including principal component analysis
+(PCA) via singular value decomposition for fast linear projections, and UMAP
+(Uniform Manifold Approximation and Projection) for nonlinear dimensionality
+reduction that better preserves local and global topological structure.
+
+Currently supports text embeddings via [Ollama](https://ollama.ai)'s
+`nomic-embed-text` model, with vectors persisted to a local
+[Qdrant](https://qdrant.tech) vector database. Nearest neighbors surface in a
+metadata panel for interactive exploration.
 
 ## Prerequisites
 
