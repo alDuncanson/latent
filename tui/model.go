@@ -148,6 +148,9 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		model.showMetadata = !model.showMetadata
 
+	case "h":
+		model.hideUnrelated = !model.hideUnrelated
+
 	case "D":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
 			return model, model.deleteSelected()
@@ -886,7 +889,15 @@ func (model Model) sortGridPointsByRenderPriority(gridPoints []gridPoint, neighb
 
 // renderGridPointsWithLabels draws markers and labels for each point on the canvas.
 func (model Model) renderGridPointsWithLabels(canvasGrid [][]canvasCell, gridPoints []gridPoint, neighborPointIndices map[int]bool, canvasWidth int, styles canvasStyles) {
+	// Check if any point is selected
+	hasSelection := model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints)
+
 	for _, point := range gridPoints {
+		// When hide mode is enabled and a point is selected, hide unrelated points to show connector lines clearly
+		if model.hideUnrelated && hasSelection && !point.isSelected && !point.isCurrent && !neighborPointIndices[point.pointIndex] {
+			continue
+		}
+
 		// Determine the marker symbol and styles based on point state
 		var markerSymbol string
 		var markerStyle lipgloss.Style
