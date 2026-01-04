@@ -46,5 +46,93 @@ go install github.com/alDuncanson/latent@latest
 ## Usage
 
 ```bash
-latent
+latent                    # Start the TUI
+latent dataset.csv        # Import texts from CSV then start TUI
+latent dataset.json       # Import texts from JSON then start TUI
+latent --preload          # Seed with demo word list
+latent --version          # Print version
 ```
+
+### Batch Import
+
+Import many texts at once from CSV or JSON files:
+
+**CSV format** - requires a `text` column header:
+
+```csv
+text
+hello world
+machine learning
+neural networks
+```
+
+**JSON format** - array of strings or objects:
+
+```json
+["hello world", "machine learning", "neural networks"]
+```
+
+or
+
+```json
+[{ "text": "hello world" }, { "text": "machine learning" }]
+```
+
+### Keyboard Controls
+
+| Key          | Action                                              |
+| ------------ | --------------------------------------------------- |
+| `Up/Down`    | Select previous/next point                          |
+| `Left/Right` | Navigate among nearest neighbors                    |
+| `Tab`        | Cycle through points                                |
+| `/`          | Toggle metadata panel                               |
+| `F`          | Toggle focus mode (show only selected + neighbors)  |
+| `P`          | Toggle projection method (PCA / UMAP)               |
+| `C`          | Toggle HDBSCAN clustering (color points by cluster) |
+| `D`          | Delete selected point                               |
+| `Enter`      | Save current input as embedding                     |
+| `Esc`        | Quit                                                |
+
+### Clustering
+
+Press `C` to enable automatic cluster detection using HDBSCAN (Hierarchical
+Density-Based Spatial Clustering of Applications with Noise). Points are colored
+by their cluster assignment, with noise points shown in gray. The metadata panel
+shows the cluster ID for the selected point.
+
+HDBSCAN finds clusters of varying densities and automatically determines the
+number of clusters—no need to specify k as with k-means.
+
+Clustering works best with:
+
+- **Diverse categories** - distinct semantic groups (colors vs animals vs
+  emotions) create natural separation in embedding space
+- **Sufficient density** - each category needs multiple terms to form dense
+  regions that HDBSCAN can detect
+
+Datasets with semantically similar terms (e.g., all physics terms) may produce
+fewer clusters since the points are spread evenly rather than forming dense
+pockets.
+
+## Test Data
+
+The `testdata/` directory contains sample files demonstrating supported import
+formats:
+
+| File                  | Format            | Description                               |
+| --------------------- | ----------------- | ----------------------------------------- |
+| `vehicles.json`       | JSON string array | Transportation terms (cars, planes, etc.) |
+| `science.csv`         | CSV               | Physics and biology terms                 |
+| `professions.json`    | JSON object array | Jobs and careers                          |
+| `geography.csv`       | CSV               | Landforms and terrain                     |
+| `mixed_categories.json` | JSON string array | 5 distinct groups for visible clustering  |
+
+Example usage:
+
+```bash
+latent testdata/mixed_categories.json
+```
+
+The `mixed_categories.json` file works best for demonstrating clustering since
+it contains 5 semantically distinct groups (tools, flowers, planets, clothing,
+coffee drinks) with 8 terms each.

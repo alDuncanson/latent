@@ -19,23 +19,25 @@ import (
 
 // Model represents the main application state for the TUI embedding visualization.
 type Model struct {
-	width, height  int
-	input          string
-	cursorPos      int
-	points         []projection.Point2D
-	storedPoints   []qdrant.Point
-	currentVec     []float32
-	ollama         *ollama.Client
-	qdrant         *qdrant.Client
-	err            error
-	debounceTimer  *time.Timer
-	embedding      bool
-	savedTexts     []string
-	selectedIndex  int
-	showMetadata   bool
-	focusMode      bool
-	useUMAP        bool
-	version        string
+	width, height   int
+	input           string
+	cursorPos       int
+	points          []projection.Point2D
+	storedPoints    []qdrant.Point
+	currentVec      []float32
+	ollama          *ollama.Client
+	qdrant          *qdrant.Client
+	err             error
+	debounceTimer   *time.Timer
+	embedding       bool
+	savedTexts      []string
+	selectedIndex   int
+	showMetadata    bool
+	focusMode       bool
+	useUMAP         bool
+	showClusters    bool
+	clusterLabels   []int
+	version         string
 }
 
 // embeddingResult is the message returned after computing an embedding vector.
@@ -46,8 +48,9 @@ type embeddingResult struct {
 
 // pointsUpdated is the message returned after points have been recalculated or loaded.
 type pointsUpdated struct {
-	points       []projection.Point2D
-	storedPoints []qdrant.Point
+	points        []projection.Point2D
+	storedPoints  []qdrant.Point
+	clusterLabels []int
 }
 
 // NewModel creates and initializes a new TUI Model with the given clients and version.
@@ -80,6 +83,7 @@ func (model *Model) projectPoints(embeddingVectors [][]float32, textLabels []str
 func (model *Model) loadPoints() tea.Cmd {
 	qdrantClient := model.qdrant
 	useUMAP := model.useUMAP
+	showClusters := model.showClusters
 	return func() tea.Msg {
 		ctx := context.Background()
 		storedPoints, err := qdrantClient.GetAll(ctx)
@@ -102,7 +106,18 @@ func (model *Model) loadPoints() tea.Cmd {
 		} else {
 			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
 		}
-		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
+
+		// Compute clusters on 2D projected coordinates (not high-dim embeddings)
+		var clusterLabels []int
+		if showClusters && len(projectedPoints) > 0 {
+			coords := make([][]float32, len(projectedPoints))
+			for i, p := range projectedPoints {
+				coords[i] = []float32{float32(p.X), float32(p.Y)}
+			}
+			clusterLabels = projection.ClusterLabels(coords, projection.DefaultHDBSCANConfig())
+		}
+
+		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints, clusterLabels: clusterLabels}
 	}
 }
 
@@ -112,6 +127,7 @@ func (model *Model) reproject() tea.Cmd {
 	currentVector := model.currentVec
 	currentInput := model.input
 	useUMAP := model.useUMAP
+	showClusters := model.showClusters
 	return func() tea.Msg {
 		var embeddingVectors [][]float32
 		var textLabels []string
@@ -131,7 +147,18 @@ func (model *Model) reproject() tea.Cmd {
 		} else {
 			projectedPoints = projection.ProjectTo2D(embeddingVectors, textLabels)
 		}
-		return pointsUpdated{points: projectedPoints}
+
+		// Compute clusters on 2D projected coordinates (not high-dim embeddings)
+		var clusterLabels []int
+		if showClusters && len(projectedPoints) > 0 {
+			coords := make([][]float32, len(projectedPoints))
+			for i, p := range projectedPoints {
+				coords[i] = []float32{float32(p.X), float32(p.Y)}
+			}
+			clusterLabels = projection.ClusterLabels(coords, projection.DefaultHDBSCANConfig())
+		}
+
+		return pointsUpdated{points: projectedPoints, clusterLabels: clusterLabels}
 	}
 }
 
@@ -201,6 +228,10 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "P":
 		model.useUMAP = !model.useUMAP
+		return model, model.reproject()
+
+	case "C":
+		model.showClusters = !model.showClusters
 		return model, model.reproject()
 
 	case "D":
@@ -343,6 +374,7 @@ func (model Model) handlePointsUpdated(update pointsUpdated) (tea.Model, tea.Cmd
 	if update.storedPoints != nil {
 		model.storedPoints = update.storedPoints
 	}
+	model.clusterLabels = update.clusterLabels
 
 	// Extract text labels from all points
 	var textLabels []string
@@ -557,7 +589,11 @@ func (model Model) View() string {
 	if model.useUMAP {
 		projectionMethod = "UMAP"
 	}
-	help := "Up/Down: select | Left/Right: neighbors | /: metadata | F: focus | P: " + projectionMethod + " | D: delete | Enter: save | Esc: quit"
+	clusterStatus := "off"
+	if model.showClusters {
+		clusterStatus = "on"
+	}
+	help := "Up/Down: select | /: metadata | F: focus | P: " + projectionMethod + " | C: clusters " + clusterStatus + " | D: delete | Esc: quit"
 	versionLabel := model.version
 	padding := totalWidth - len(help) - len(versionLabel)
 	if padding < 1 {
@@ -597,6 +633,15 @@ func (model Model) renderMetadata(panelWidth, panelHeight int) string {
 
 		euclideanNorm := computeVectorNorm(selectedPoint.Vector)
 		contentLines = append(contentLines, labelStyle.Render("L2 norm: ")+valueStyle.Render(fmt.Sprintf("%.4f", euclideanNorm)))
+
+		if model.showClusters && model.selectedIndex < len(model.clusterLabels) {
+			clusterID := model.clusterLabels[model.selectedIndex]
+			clusterText := "noise"
+			if clusterID >= 0 {
+				clusterText = fmt.Sprintf("%d", clusterID)
+			}
+			contentLines = append(contentLines, labelStyle.Render("Cluster: ")+valueStyle.Render(clusterText))
+		}
 		contentLines = append(contentLines, "")
 	}
 
@@ -805,6 +850,7 @@ type canvasStyles struct {
 	lineStyle          lipgloss.Style
 	neighborDotStyle   lipgloss.Style
 	neighborLabelStyle lipgloss.Style
+	clusterColors      []lipgloss.Color
 }
 
 // initializeCanvasGrid creates a 2D grid of empty canvas cells.
@@ -829,6 +875,16 @@ func (model Model) defineCanvasStyles() canvasStyles {
 		lineStyle:          lipgloss.NewStyle().Foreground(lipgloss.Color("117")),              // Light blue for connector dots
 		neighborDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true),   // Pink for neighbor dots
 		neighborLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true),   // Yellow for neighbor words
+		clusterColors: []lipgloss.Color{
+			"196", // Red
+			"46",  // Green
+			"21",  // Blue
+			"226", // Yellow
+			"201", // Magenta
+			"51",  // Cyan
+			"208", // Orange
+			"129", // Purple
+		},
 	}
 }
 
@@ -913,6 +969,7 @@ type gridPoint struct {
 	label       string
 	isCurrent   bool
 	isSelected  bool
+	clusterID   int
 }
 
 // convertPointsToGridPositions maps 2D projection coordinates to grid cell positions.
@@ -942,6 +999,12 @@ func (model Model) convertPointsToGridPositions(paddingSize, plotAreaWidth, plot
 		isCurrentInputPoint := pointIndex == len(model.points)-1 && strings.HasSuffix(point.Text, " ●")
 		isSelectedPoint := pointIndex == model.selectedIndex
 
+		// Get cluster ID for this point (-1 if not clustered or out of range)
+		clusterID := -1
+		if pointIndex < len(model.clusterLabels) {
+			clusterID = model.clusterLabels[pointIndex]
+		}
+
 		gridPoints = append(gridPoints, gridPoint{
 			rowIndex:    rowIndex,
 			columnIndex: columnIndex,
@@ -949,6 +1012,7 @@ func (model Model) convertPointsToGridPositions(paddingSize, plotAreaWidth, plot
 			label:       point.Text,
 			isCurrent:   isCurrentInputPoint,
 			isSelected:  isSelectedPoint,
+			clusterID:   clusterID,
 		})
 	}
 
@@ -1046,6 +1110,11 @@ func (model Model) renderGridPointsWithLabels(canvasGrid [][]canvasCell, gridPoi
 			markerSymbol = "◆"
 			markerStyle = styles.neighborDotStyle
 			labelStyle = styles.neighborLabelStyle
+		} else if model.showClusters && point.clusterID >= 0 {
+			markerSymbol = "●"
+			clusterColor := styles.clusterColors[point.clusterID%len(styles.clusterColors)]
+			markerStyle = lipgloss.NewStyle().Foreground(clusterColor)
+			labelStyle = lipgloss.NewStyle().Foreground(clusterColor)
 		} else {
 			markerSymbol = "○"
 			markerStyle = styles.normalStyle
