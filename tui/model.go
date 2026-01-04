@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// Model represents the main application state for the TUI embedding visualization.
 type Model struct {
 	width, height  int
 	input          string
@@ -36,16 +37,19 @@ type Model struct {
 	version        string
 }
 
+// embeddingResult is the message returned after computing an embedding vector.
 type embeddingResult struct {
 	vector []float32
 	err    error
 }
 
+// pointsUpdated is the message returned after points have been recalculated or loaded.
 type pointsUpdated struct {
 	points       []projection.Point2D
 	storedPoints []qdrant.Point
 }
 
+// NewModel creates and initializes a new TUI Model with the given clients and version.
 func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client, version string) Model {
 	return Model{
 		ollama:        ollamaClient,
@@ -58,284 +62,365 @@ func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client, version 
 	}
 }
 
-func (m Model) Init() tea.Cmd {
-	return m.loadPoints()
+// Init initializes the model by loading existing points from the database.
+func (model Model) Init() tea.Cmd {
+	return model.loadPoints()
 }
 
-func (m *Model) loadPoints() tea.Cmd {
-	client := m.qdrant
+// loadPoints fetches all stored embeddings from Qdrant and projects them to 2D coordinates.
+func (model *Model) loadPoints() tea.Cmd {
+	qdrantClient := model.qdrant
 	return func() tea.Msg {
 		ctx := context.Background()
-		stored, err := client.GetAll(ctx)
+		storedPoints, err := qdrantClient.GetAll(ctx)
 		if err != nil {
 			return embeddingResult{err: err}
 		}
 
-		var vectors [][]float32
-		var texts []string
-		for _, p := range stored {
-			vectors = append(vectors, p.Vector)
-			texts = append(texts, p.Text)
+		// Extract vectors and text labels from stored points
+		var embeddingVectors [][]float32
+		var textLabels []string
+		for _, storedPoint := range storedPoints {
+			embeddingVectors = append(embeddingVectors, storedPoint.Vector)
+			textLabels = append(textLabels, storedPoint.Text)
 		}
 
-		points := projection.ProjectTo2D(vectors, texts)
-		return pointsUpdated{points: points, storedPoints: stored}
+		// Project high-dimensional vectors to 2D for visualization
+		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
 	}
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+// Update handles all incoming messages and updates the model state accordingly.
+func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch message := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "esc":
-			return m, tea.Quit
-		case "enter":
-			if m.input != "" && m.currentVec != nil {
-				cmd := m.saveCurrentEmbedding()
-				m.input = ""
-				m.cursorPos = 0
-				m.currentVec = nil
-				return m, cmd
-			}
-		case "backspace":
-			if m.cursorPos > 0 {
-				m.input = m.input[:m.cursorPos-1] + m.input[m.cursorPos:]
-				m.cursorPos--
-				return m, m.debounceEmbed()
-			}
-		case "left":
-			if m.cursorPos > 0 {
-				m.cursorPos--
-			}
-		case "right":
-			if m.cursorPos < len(m.input) {
-				m.cursorPos++
-			}
-		case "tab":
-			if len(m.storedPoints) > 0 {
-				m.selectedIndex = (m.selectedIndex + 1) % len(m.storedPoints)
-			}
-		case "shift+tab":
-			if len(m.storedPoints) > 0 {
-				m.selectedIndex--
-				if m.selectedIndex < 0 {
-					m.selectedIndex = len(m.storedPoints) - 1
-				}
-			}
-		case "up":
-			if len(m.storedPoints) > 0 {
-				m.selectedIndex--
-				if m.selectedIndex < 0 {
-					m.selectedIndex = len(m.storedPoints) - 1
-				}
-			}
-		case "down":
-			if len(m.storedPoints) > 0 {
-				m.selectedIndex = (m.selectedIndex + 1) % len(m.storedPoints)
-			}
-		case "/":
-			m.showMetadata = !m.showMetadata
-		case "F":
-			m.focusMode = !m.focusMode
-		case "D":
-			if m.selectedIndex >= 0 && m.selectedIndex < len(m.storedPoints) {
-				return m, m.deleteSelected()
-			}
-		default:
-			if len(msg.String()) == 1 {
-				m.input = m.input[:m.cursorPos] + msg.String() + m.input[m.cursorPos:]
-				m.cursorPos++
-				return m, m.debounceEmbed()
-			}
-		}
+		return model.handleKeyPress(message)
 
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		model.width = message.Width
+		model.height = message.Height
 
 	case embeddingResult:
-		m.embedding = false
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.currentVec = msg.vector
-		m.err = nil
-		if m.currentVec != nil {
-			return m, m.updateVisualization()
-		}
+		return model.handleEmbeddingResult(message)
 
 	case pointsUpdated:
-		m.points = msg.points
-		if msg.storedPoints != nil {
-			m.storedPoints = msg.storedPoints
-		}
-		var texts []string
-		for _, p := range m.points {
-			texts = append(texts, p.Text)
-		}
-		m.savedTexts = texts
-		if m.selectedIndex >= len(m.storedPoints) {
-			m.selectedIndex = len(m.storedPoints) - 1
-		}
+		return model.handlePointsUpdated(message)
 	}
 
-	return m, nil
+	return model, nil
 }
 
-func (m *Model) debounceEmbed() tea.Cmd {
-	input := m.input
-	client := m.ollama
+// handleKeyPress processes keyboard input and returns the updated model and any commands.
+func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch keyMessage.String() {
+	case "ctrl+c", "esc":
+		return model, tea.Quit
+
+	case "enter":
+		return model.handleEnterKey()
+
+	case "backspace":
+		return model.handleBackspace()
+
+	case "left":
+		if model.cursorPos > 0 {
+			model.cursorPos--
+		}
+
+	case "right":
+		if model.cursorPos < len(model.input) {
+			model.cursorPos++
+		}
+
+	case "tab":
+		model.selectNextPoint()
+
+	case "shift+tab":
+		model.selectPreviousPoint()
+
+	case "up":
+		model.selectPreviousPoint()
+
+	case "down":
+		model.selectNextPoint()
+
+	case "/":
+		model.showMetadata = !model.showMetadata
+
+	case "D":
+		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
+			return model, model.deleteSelected()
+		}
+
+	default:
+		return model.handleCharacterInput(keyMessage)
+	}
+
+	return model, nil
+}
+
+// handleEnterKey saves the current embedding when Enter is pressed.
+func (model Model) handleEnterKey() (tea.Model, tea.Cmd) {
+	if model.input != "" && model.currentVec != nil {
+		saveCommand := model.saveCurrentEmbedding()
+		model.input = ""
+		model.cursorPos = 0
+		model.currentVec = nil
+		return model, saveCommand
+	}
+	return model, nil
+}
+
+// handleBackspace removes the character before the cursor and triggers re-embedding.
+func (model Model) handleBackspace() (tea.Model, tea.Cmd) {
+	if model.cursorPos > 0 {
+		model.input = model.input[:model.cursorPos-1] + model.input[model.cursorPos:]
+		model.cursorPos--
+		return model, model.debounceEmbed()
+	}
+	return model, nil
+}
+
+// selectNextPoint moves the selection to the next point in the list.
+func (model *Model) selectNextPoint() {
+	if len(model.storedPoints) > 0 {
+		model.selectedIndex = (model.selectedIndex + 1) % len(model.storedPoints)
+	}
+}
+
+// selectPreviousPoint moves the selection to the previous point in the list.
+func (model *Model) selectPreviousPoint() {
+	if len(model.storedPoints) > 0 {
+		model.selectedIndex--
+		if model.selectedIndex < 0 {
+			model.selectedIndex = len(model.storedPoints) - 1
+		}
+	}
+}
+
+// handleCharacterInput inserts a typed character at the cursor position.
+func (model Model) handleCharacterInput(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
+	keyString := keyMessage.String()
+	if len(keyString) == 1 {
+		model.input = model.input[:model.cursorPos] + keyString + model.input[model.cursorPos:]
+		model.cursorPos++
+		return model, model.debounceEmbed()
+	}
+	return model, nil
+}
+
+// handleEmbeddingResult processes the result of an embedding computation.
+func (model Model) handleEmbeddingResult(result embeddingResult) (tea.Model, tea.Cmd) {
+	model.embedding = false
+	if result.err != nil {
+		model.err = result.err
+		return model, nil
+	}
+	model.currentVec = result.vector
+	model.err = nil
+	if model.currentVec != nil {
+		return model, model.updateVisualization()
+	}
+	return model, nil
+}
+
+// handlePointsUpdated processes updated point data and refreshes the visualization.
+func (model Model) handlePointsUpdated(update pointsUpdated) (tea.Model, tea.Cmd) {
+	model.points = update.points
+	if update.storedPoints != nil {
+		model.storedPoints = update.storedPoints
+	}
+
+	// Extract text labels from all points
+	var textLabels []string
+	for _, point := range model.points {
+		textLabels = append(textLabels, point.Text)
+	}
+	model.savedTexts = textLabels
+
+	// Ensure selected index stays within bounds
+	if model.selectedIndex >= len(model.storedPoints) {
+		model.selectedIndex = len(model.storedPoints) - 1
+	}
+
+	return model, nil
+}
+
+// debounceEmbed waits briefly before computing an embedding to avoid excessive API calls.
+func (model *Model) debounceEmbed() tea.Cmd {
+	inputText := model.input
+	ollamaClient := model.ollama
 	return func() tea.Msg {
 		time.Sleep(150 * time.Millisecond)
-		if input == "" {
+		if inputText == "" {
 			return embeddingResult{}
 		}
-		vec, err := client.Embed(input)
-		return embeddingResult{vector: vec, err: err}
+		embeddingVector, err := ollamaClient.Embed(inputText)
+		return embeddingResult{vector: embeddingVector, err: err}
 	}
 }
 
-func (m *Model) saveCurrentEmbedding() tea.Cmd {
-	text := m.input
-	vec := m.currentVec
-	client := m.qdrant
+// saveCurrentEmbedding persists the current input and its embedding to the database.
+func (model *Model) saveCurrentEmbedding() tea.Cmd {
+	textToSave := model.input
+	vectorToSave := model.currentVec
+	qdrantClient := model.qdrant
 	return func() tea.Msg {
 		ctx := context.Background()
-		id := uuid.New().String()
-		if err := client.Upsert(ctx, id, text, vec); err != nil {
+		pointID := uuid.New().String()
+		if err := qdrantClient.Upsert(ctx, pointID, textToSave, vectorToSave); err != nil {
 			return embeddingResult{err: err}
 		}
 
-		stored, err := client.GetAll(ctx)
+		// Reload all points after saving
+		storedPoints, err := qdrantClient.GetAll(ctx)
 		if err != nil {
 			return embeddingResult{err: err}
 		}
 
-		var vectors [][]float32
-		var texts []string
-		for _, p := range stored {
-			vectors = append(vectors, p.Vector)
-			texts = append(texts, p.Text)
+		// Extract vectors and text labels for projection
+		var embeddingVectors [][]float32
+		var textLabels []string
+		for _, storedPoint := range storedPoints {
+			embeddingVectors = append(embeddingVectors, storedPoint.Vector)
+			textLabels = append(textLabels, storedPoint.Text)
 		}
 
-		points := projection.ProjectTo2D(vectors, texts)
-		return pointsUpdated{points: points, storedPoints: stored}
+		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
 	}
 }
 
-func (m *Model) deleteSelected() tea.Cmd {
-	if m.selectedIndex < 0 || m.selectedIndex >= len(m.storedPoints) {
+// deleteSelected removes the currently selected point from the database.
+func (model *Model) deleteSelected() tea.Cmd {
+	if model.selectedIndex < 0 || model.selectedIndex >= len(model.storedPoints) {
 		return nil
 	}
-	id := m.storedPoints[m.selectedIndex].ID
-	client := m.qdrant
+	pointIDToDelete := model.storedPoints[model.selectedIndex].ID
+	qdrantClient := model.qdrant
 	return func() tea.Msg {
 		ctx := context.Background()
-		if err := client.Delete(ctx, id); err != nil {
+		if err := qdrantClient.Delete(ctx, pointIDToDelete); err != nil {
 			return embeddingResult{err: err}
 		}
 
-		stored, err := client.GetAll(ctx)
+		// Reload all points after deletion
+		storedPoints, err := qdrantClient.GetAll(ctx)
 		if err != nil {
 			return embeddingResult{err: err}
 		}
 
-		var vectors [][]float32
-		var texts []string
-		for _, p := range stored {
-			vectors = append(vectors, p.Vector)
-			texts = append(texts, p.Text)
+		// Extract vectors and text labels for projection
+		var embeddingVectors [][]float32
+		var textLabels []string
+		for _, storedPoint := range storedPoints {
+			embeddingVectors = append(embeddingVectors, storedPoint.Vector)
+			textLabels = append(textLabels, storedPoint.Text)
 		}
 
-		points := projection.ProjectTo2D(vectors, texts)
-		return pointsUpdated{points: points, storedPoints: stored}
+		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		return pointsUpdated{points: projectedPoints, storedPoints: storedPoints}
 	}
 }
 
-func (m *Model) updateVisualization() tea.Cmd {
-	client := m.qdrant
-	currentVec := m.currentVec
-	input := m.input
+// updateVisualization recalculates the 2D projection including the current input vector.
+func (model *Model) updateVisualization() tea.Cmd {
+	qdrantClient := model.qdrant
+	currentVector := model.currentVec
+	currentInput := model.input
 	return func() tea.Msg {
 		ctx := context.Background()
-		stored, err := client.GetAll(ctx)
+		storedPoints, err := qdrantClient.GetAll(ctx)
 		if err != nil {
 			return pointsUpdated{}
 		}
 
-		var vectors [][]float32
-		var texts []string
-		for _, p := range stored {
-			vectors = append(vectors, p.Vector)
-			texts = append(texts, p.Text)
+		// Collect all stored vectors and their labels
+		var embeddingVectors [][]float32
+		var textLabels []string
+		for _, storedPoint := range storedPoints {
+			embeddingVectors = append(embeddingVectors, storedPoint.Vector)
+			textLabels = append(textLabels, storedPoint.Text)
 		}
 
-		if currentVec != nil {
-			vectors = append(vectors, currentVec)
-			texts = append(texts, input+" ●")
+		// Add the current input vector (not yet saved) to the visualization
+		if currentVector != nil {
+			embeddingVectors = append(embeddingVectors, currentVector)
+			textLabels = append(textLabels, currentInput+" ●")
 		}
 
-		points := projection.ProjectTo2D(vectors, texts)
-		return pointsUpdated{points: points}
+		projectedPoints := projection.ProjectTo2D(embeddingVectors, textLabels)
+		return pointsUpdated{points: projectedPoints}
 	}
 }
 
-func (m Model) View() string {
-	margin := 1
-	gap := 1
-	totalWidth := m.width - margin*2
+// View renders the complete UI as a string.
+func (model Model) View() string {
+	marginSize := 1
+	gapSize := 1
+	totalWidth := model.width - marginSize*2
 
+	// Define UI styles
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	inputBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
-	canvasBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
-	metaBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+	inputBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+	canvasBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+	metadataBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
 
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("latent"))
-	b.WriteString("\n")
+	var outputBuilder strings.Builder
 
-	inputDisplay := m.input
-	if m.embedding {
-		inputDisplay += " (embedding...)"
+	// Render title
+	outputBuilder.WriteString(titleStyle.Render("latent"))
+	outputBuilder.WriteString("\n")
+
+	// Prepare input display with optional embedding indicator
+	inputDisplayText := model.input
+	if model.embedding {
+		inputDisplayText += " (embedding...)"
 	}
 
-	canvasHeight := m.height - 9
+	// Calculate canvas dimensions
+	canvasHeight := model.height - 9
 	if canvasHeight < 10 {
 		canvasHeight = 10
 	}
 
-	showMeta := m.showMetadata && m.selectedIndex >= 0 && m.selectedIndex < len(m.storedPoints)
-	if showMeta {
-		metaOuter := 26
-		metaInner := metaOuter - 4
-		canvasInner := totalWidth - metaOuter - gap - 2
+	// Determine whether to show the metadata panel
+	shouldShowMetadata := model.showMetadata && model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints)
 
-		b.WriteString(inputBorder.Width(totalWidth - 4).Render(inputDisplay))
-		b.WriteString("\n")
+	if shouldShowMetadata {
+		// Layout with metadata panel on the right
+		metadataPanelOuterWidth := 26
+		metadataPanelInnerWidth := metadataPanelOuterWidth - 4
+		canvasInnerWidth := totalWidth - metadataPanelOuterWidth - gapSize - 2
 
-		canvas := m.renderCanvas(canvasInner, canvasHeight)
-		metadata := m.renderMetadata(metaInner, canvasHeight-1)
+		outputBuilder.WriteString(inputBorderStyle.Width(totalWidth - 4).Render(inputDisplayText))
+		outputBuilder.WriteString("\n")
 
-		left := canvasBorder.Width(canvasInner).Render(canvas)
-		right := metaBorder.Width(metaInner).Height(canvasHeight - 1).Render(metadata)
+		canvasContent := model.renderCanvas(canvasInnerWidth, canvasHeight)
+		metadataContent := model.renderMetadata(metadataPanelInnerWidth, canvasHeight-1)
 
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right))
+		leftPanel := canvasBorderStyle.Width(canvasInnerWidth).Render(canvasContent)
+		rightPanel := metadataBorderStyle.Width(metadataPanelInnerWidth).Height(canvasHeight - 1).Render(metadataContent)
+
+		outputBuilder.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, strings.Repeat(" ", gapSize), rightPanel))
 	} else {
-		innerWidth := totalWidth - 4
+		// Full-width canvas layout without metadata panel
+		canvasInnerWidth := totalWidth - 4
 
-		b.WriteString(inputBorder.Width(innerWidth).Render(inputDisplay))
-		b.WriteString("\n")
+		outputBuilder.WriteString(inputBorderStyle.Width(canvasInnerWidth).Render(inputDisplayText))
+		outputBuilder.WriteString("\n")
 
-		canvas := m.renderCanvas(innerWidth, canvasHeight)
-		b.WriteString(canvasBorder.Width(innerWidth).Render(canvas))
+		canvasContent := model.renderCanvas(canvasInnerWidth, canvasHeight)
+		outputBuilder.WriteString(canvasBorderStyle.Width(canvasInnerWidth).Render(canvasContent))
 	}
-	b.WriteString("\n")
+	outputBuilder.WriteString("\n")
 
-	if m.err != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-		b.WriteString(errStyle.Render("Error: "+m.err.Error()) + "\n")
+	// Render error message if present
+	if model.err != nil {
+		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+		outputBuilder.WriteString(errorStyle.Render("Error: "+model.err.Error()) + "\n")
 	}
 
 	help := "Up/Down: select | /: metadata | F: focus | D: delete | Enter: save | Esc: quit"
@@ -344,179 +429,212 @@ func (m Model) View() string {
 	if padding < 1 {
 		padding = 1
 	}
-	b.WriteString(helpStyle.Render(help + strings.Repeat(" ", padding) + versionLabel))
+	outputBuilder.WriteString(helpStyle.Render(helpText + strings.Repeat(" ", paddingSpaces) + versionLabel))
 
-	return lipgloss.NewStyle().Padding(1, margin).Render(b.String())
+	return lipgloss.NewStyle().Padding(1, marginSize).Render(outputBuilder.String())
 }
 
-func (m Model) renderMetadata(width, height int) string {
-	if m.selectedIndex < 0 || m.selectedIndex >= len(m.storedPoints) {
+// renderMetadata generates the metadata panel content for the selected point.
+func (model Model) renderMetadata(panelWidth, panelHeight int) string {
+	if model.selectedIndex < 0 || model.selectedIndex >= len(model.storedPoints) {
 		return ""
 	}
 
-	selected := m.storedPoints[m.selectedIndex]
-	var lines []string
+	selectedPoint := model.storedPoints[model.selectedIndex]
+	var contentLines []string
 
+	// Define metadata panel styles
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 
-	lines = append(lines, headerStyle.Render("Selected"))
-	lines = append(lines, valueStyle.Render(truncate(selected.Text, width)))
-	lines = append(lines, "")
+	// Section: Selected point info
+	contentLines = append(contentLines, headerStyle.Render("Selected"))
+	contentLines = append(contentLines, valueStyle.Render(truncateString(selectedPoint.Text, panelWidth)))
+	contentLines = append(contentLines, "")
 
-	if len(selected.Vector) > 0 {
-		lines = append(lines, labelStyle.Render("Dim: ")+valueStyle.Render(fmt.Sprintf("%d", len(selected.Vector))))
+	// Section: Vector statistics
+	if len(selectedPoint.Vector) > 0 {
+		contentLines = append(contentLines, labelStyle.Render("Dim: ")+valueStyle.Render(fmt.Sprintf("%d", len(selectedPoint.Vector))))
 
-		min, max, mean := vectorStats(selected.Vector)
-		lines = append(lines, labelStyle.Render("Min/Max: ")+valueStyle.Render(fmt.Sprintf("%.3f / %.3f", min, max)))
-		lines = append(lines, labelStyle.Render("Mean: ")+valueStyle.Render(fmt.Sprintf("%.4f", mean)))
+		minimumValue, maximumValue, meanValue := computeVectorStatistics(selectedPoint.Vector)
+		contentLines = append(contentLines, labelStyle.Render("Min/Max: ")+valueStyle.Render(fmt.Sprintf("%.3f / %.3f", minimumValue, maximumValue)))
+		contentLines = append(contentLines, labelStyle.Render("Mean: ")+valueStyle.Render(fmt.Sprintf("%.4f", meanValue)))
 
-		norm := vectorNorm(selected.Vector)
-		lines = append(lines, labelStyle.Render("L2 norm: ")+valueStyle.Render(fmt.Sprintf("%.4f", norm)))
-		lines = append(lines, "")
+		euclideanNorm := computeVectorNorm(selectedPoint.Vector)
+		contentLines = append(contentLines, labelStyle.Render("L2 norm: ")+valueStyle.Render(fmt.Sprintf("%.4f", euclideanNorm)))
+		contentLines = append(contentLines, "")
 	}
 
-	neighbors := m.findNearestNeighbors(m.selectedIndex, 5)
-	if len(neighbors) > 0 {
-		lines = append(lines, headerStyle.Render("Nearest"))
-		for _, n := range neighbors {
-			line := fmt.Sprintf("%.3f %s", n.similarity, truncate(n.text, width-7))
-			lines = append(lines, line)
+	// Section: Nearest neighbors by cosine similarity
+	nearestNeighbors := model.findNearestNeighbors(model.selectedIndex, 5)
+	if len(nearestNeighbors) > 0 {
+		contentLines = append(contentLines, headerStyle.Render("Nearest"))
+		for _, neighborEntry := range nearestNeighbors {
+			neighborLine := fmt.Sprintf("%.3f %s", neighborEntry.similarity, truncateString(neighborEntry.text, panelWidth-7))
+			contentLines = append(contentLines, neighborLine)
 		}
 	}
 
-	for len(lines) < height {
-		lines = append(lines, "")
+	// Pad or truncate to fit panel height
+	for len(contentLines) < panelHeight {
+		contentLines = append(contentLines, "")
 	}
-	if len(lines) > height {
-		lines = lines[:height]
+	if len(contentLines) > panelHeight {
+		contentLines = contentLines[:panelHeight]
 	}
 
-	return strings.Join(lines, "\n")
+	return strings.Join(contentLines, "\n")
 }
 
+// neighbor represents a neighboring point with its similarity score.
 type neighbor struct {
 	text       string
 	similarity float64
 }
 
-func (m Model) findNearestNeighbors(selectedIdx int, k int) []neighbor {
-	if selectedIdx < 0 || selectedIdx >= len(m.storedPoints) {
+// findNearestNeighbors returns the k most similar points to the selected point.
+func (model Model) findNearestNeighbors(selectedPointIndex int, maxNeighbors int) []neighbor {
+	if selectedPointIndex < 0 || selectedPointIndex >= len(model.storedPoints) {
 		return nil
 	}
 
-	selected := m.storedPoints[selectedIdx]
-	var neighbors []neighbor
+	selectedPoint := model.storedPoints[selectedPointIndex]
+	var neighborList []neighbor
 
-	for i, p := range m.storedPoints {
-		if i == selectedIdx {
+	// Calculate cosine similarity with all other points
+	for pointIndex, candidatePoint := range model.storedPoints {
+		if pointIndex == selectedPointIndex {
 			continue
 		}
-		sim := cosineSimilarity(selected.Vector, p.Vector)
-		neighbors = append(neighbors, neighbor{text: p.Text, similarity: sim})
+		similarityScore := computeCosineSimilarity(selectedPoint.Vector, candidatePoint.Vector)
+		neighborList = append(neighborList, neighbor{text: candidatePoint.Text, similarity: similarityScore})
 	}
 
-	sort.Slice(neighbors, func(i, j int) bool {
-		return neighbors[i].similarity > neighbors[j].similarity
+	// Sort by similarity in descending order (most similar first)
+	sort.Slice(neighborList, func(firstIndex, secondIndex int) bool {
+		return neighborList[firstIndex].similarity > neighborList[secondIndex].similarity
 	})
 
-	if len(neighbors) > k {
-		neighbors = neighbors[:k]
+	// Return only the top k neighbors
+	if len(neighborList) > maxNeighbors {
+		neighborList = neighborList[:maxNeighbors]
 	}
-	return neighbors
+	return neighborList
 }
 
-func (m Model) findNearestNeighborIndices(selectedIdx int, k int) []int {
-	if selectedIdx < 0 || selectedIdx >= len(m.storedPoints) {
+// findNearestNeighborIndices returns the indices of the k most similar points.
+func (model Model) findNearestNeighborIndices(selectedPointIndex int, maxNeighbors int) []int {
+	if selectedPointIndex < 0 || selectedPointIndex >= len(model.storedPoints) {
 		return nil
 	}
 
-	selected := m.storedPoints[selectedIdx]
+	selectedPoint := model.storedPoints[selectedPointIndex]
+
+	// indexedNeighbor pairs an index with its similarity score for sorting
 	type indexedNeighbor struct {
-		idx        int
+		pointIndex int
 		similarity float64
 	}
-	var neighbors []indexedNeighbor
+	var neighborList []indexedNeighbor
 
-	for i, p := range m.storedPoints {
-		if i == selectedIdx {
+	// Calculate cosine similarity with all other points
+	for pointIndex, candidatePoint := range model.storedPoints {
+		if pointIndex == selectedPointIndex {
 			continue
 		}
-		sim := cosineSimilarity(selected.Vector, p.Vector)
-		neighbors = append(neighbors, indexedNeighbor{idx: i, similarity: sim})
+		similarityScore := computeCosineSimilarity(selectedPoint.Vector, candidatePoint.Vector)
+		neighborList = append(neighborList, indexedNeighbor{pointIndex: pointIndex, similarity: similarityScore})
 	}
 
-	sort.Slice(neighbors, func(i, j int) bool {
-		return neighbors[i].similarity > neighbors[j].similarity
+	// Sort by similarity in descending order
+	sort.Slice(neighborList, func(firstIndex, secondIndex int) bool {
+		return neighborList[firstIndex].similarity > neighborList[secondIndex].similarity
 	})
 
-	if len(neighbors) > k {
-		neighbors = neighbors[:k]
+	// Return only the top k neighbor indices
+	if len(neighborList) > maxNeighbors {
+		neighborList = neighborList[:maxNeighbors]
 	}
 
-	var indices []int
-	for _, n := range neighbors {
-		indices = append(indices, n.idx)
+	var neighborIndices []int
+	for _, neighborEntry := range neighborList {
+		neighborIndices = append(neighborIndices, neighborEntry.pointIndex)
 	}
-	return indices
+	return neighborIndices
 }
 
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
+// computeCosineSimilarity calculates the cosine similarity between two vectors.
+// Returns a value between -1 and 1, where 1 means identical direction.
+func computeCosineSimilarity(vectorA, vectorB []float32) float64 {
+	if len(vectorA) != len(vectorB) || len(vectorA) == 0 {
 		return 0
 	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
+
+	var dotProduct float64
+	var normSquaredA float64
+	var normSquaredB float64
+
+	for dimensionIndex := range vectorA {
+		componentA := float64(vectorA[dimensionIndex])
+		componentB := float64(vectorB[dimensionIndex])
+		dotProduct += componentA * componentB
+		normSquaredA += componentA * componentA
+		normSquaredB += componentB * componentB
 	}
-	if normA == 0 || normB == 0 {
+
+	if normSquaredA == 0 || normSquaredB == 0 {
 		return 0
 	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	return dotProduct / (math.Sqrt(normSquaredA) * math.Sqrt(normSquaredB))
 }
 
-func vectorStats(v []float32) (min, max, mean float64) {
-	if len(v) == 0 {
+// computeVectorStatistics returns the minimum, maximum, and mean values of a vector.
+func computeVectorStatistics(vector []float32) (minimumValue, maximumValue, meanValue float64) {
+	if len(vector) == 0 {
 		return
 	}
-	min = float64(v[0])
-	max = float64(v[0])
-	var sum float64
-	for _, val := range v {
-		f := float64(val)
-		if f < min {
-			min = f
+
+	minimumValue = float64(vector[0])
+	maximumValue = float64(vector[0])
+	var sumOfValues float64
+
+	for _, component := range vector {
+		componentAsFloat := float64(component)
+		if componentAsFloat < minimumValue {
+			minimumValue = componentAsFloat
 		}
-		if f > max {
-			max = f
+		if componentAsFloat > maximumValue {
+			maximumValue = componentAsFloat
 		}
-		sum += f
+		sumOfValues += componentAsFloat
 	}
-	mean = sum / float64(len(v))
+
+	meanValue = sumOfValues / float64(len(vector))
 	return
 }
 
-func vectorNorm(v []float32) float64 {
-	var sum float64
-	for _, val := range v {
-		sum += float64(val) * float64(val)
+// computeVectorNorm calculates the L2 (Euclidean) norm of a vector.
+func computeVectorNorm(vector []float32) float64 {
+	var sumOfSquares float64
+	for _, component := range vector {
+		sumOfSquares += float64(component) * float64(component)
 	}
-	return math.Sqrt(sum)
+	return math.Sqrt(sumOfSquares)
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// truncateString shortens a string to maxLength, adding ellipsis if truncated.
+func truncateString(text string, maxLength int) string {
+	if len(text) <= maxLength {
+		return text
 	}
-	if maxLen < 3 {
-		return s[:maxLen]
+	if maxLength < 3 {
+		return text[:maxLength]
 	}
-	return s[:maxLen-3] + "..."
+	return text[:maxLength-3] + "..."
 }
 
+// canvasCell represents a single cell in the rendering grid with its character and styling.
 type canvasCell struct {
 	char       rune
 	style      lipgloss.Style
@@ -525,243 +643,391 @@ type canvasCell struct {
 	isLine     bool
 }
 
-func (m Model) renderCanvas(width, height int) string {
-	grid := make([][]canvasCell, height)
-	for i := range grid {
-		grid[i] = make([]canvasCell, width)
-		for j := range grid[i] {
-			grid[i][j] = canvasCell{char: ' ', style: lipgloss.NewStyle()}
-		}
-	}
+// renderCanvas generates the 2D visualization of all embedding points.
+func (model Model) renderCanvas(canvasWidth, canvasHeight int) string {
+	// Initialize the canvas grid with empty cells
+	canvasGrid := model.initializeCanvasGrid(canvasWidth, canvasHeight)
 
-	selectedDotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)   // Orange for selected dot
-	selectedLabelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("118")).Bold(true) // Green for selected word
-	currentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213"))                  // Pink for current input
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))                   // Dim gray for unselected
-	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117"))                     // Light blue for connector dots
-	neighborDotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)   // Pink for neighbor dots
-	neighborLabelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true) // Yellow for neighbor words
+	// Define all rendering styles
+	styles := model.defineCanvasStyles()
 
-	if len(m.points) == 0 {
-		centerY := height / 2
-		msg := "No embeddings yet - start typing!"
-		startX := (width - len(msg)) / 2
-		if startX < 0 {
-			startX = 0
-		}
-		for i, c := range msg {
-			if startX+i < width {
-				grid[centerY][startX+i] = canvasCell{char: c, style: lipgloss.NewStyle()}
-			}
-		}
+	// Handle empty state - show placeholder message
+	if len(model.points) == 0 {
+		model.renderEmptyCanvasMessage(canvasGrid, canvasWidth, canvasHeight)
 	} else {
-		minX, maxX := m.points[0].X, m.points[0].X
-		minY, maxY := m.points[0].Y, m.points[0].Y
-		for _, p := range m.points {
-			if p.X < minX {
-				minX = p.X
-			}
-			if p.X > maxX {
-				maxX = p.X
-			}
-			if p.Y < minY {
-				minY = p.Y
-			}
-			if p.Y > maxY {
-				maxY = p.Y
-			}
-		}
-
-		rangeX := maxX - minX
-		rangeY := maxY - minY
-		if rangeX == 0 {
-			rangeX = 1
-		}
-		if rangeY == 0 {
-			rangeY = 1
-		}
-
-		padding := 2
-		plotWidth := width - 2*padding
-		plotHeight := height - 2*padding
-
-		type gridPoint struct {
-			y, x       int
-			idx        int
-			label      string
-			isCurrent  bool
-			isSelected bool
-		}
-		var gridPoints []gridPoint
-
-		for i, p := range m.points {
-			x := padding + int((p.X-minX)/rangeX*float64(plotWidth-1))
-			y := padding + int((p.Y-minY)/rangeY*float64(plotHeight-1))
-
-			if x < 0 {
-				x = 0
-			}
-			if x >= width {
-				x = width - 1
-			}
-			if y < 0 {
-				y = 0
-			}
-			if y >= height {
-				y = height - 1
-			}
-
-			isCurrent := i == len(m.points)-1 && strings.HasSuffix(p.Text, " ●")
-			isSelected := i == m.selectedIndex
-
-			gridPoints = append(gridPoints, gridPoint{y: y, x: x, idx: i, label: p.Text, isCurrent: isCurrent, isSelected: isSelected})
-		}
-
-		neighborIndices := make(map[int]bool)
-		var selectedGP *gridPoint
-		for i := range gridPoints {
-			if gridPoints[i].isSelected {
-				selectedGP = &gridPoints[i]
-				neighbors := m.findNearestNeighborIndices(m.selectedIndex, 5)
-				for _, ni := range neighbors {
-					neighborIndices[ni] = true
-				}
-				break
-			}
-		}
-
-		if selectedGP != nil {
-			for _, gp := range gridPoints {
-				if neighborIndices[gp.idx] {
-					drawLine(grid, selectedGP.x, selectedGP.y, gp.x, gp.y, lineStyle)
-				}
-			}
-		}
-
-		// Sort so highlighted points render on top (last): unselected first, then neighbors, then current, then selected
-		sort.SliceStable(gridPoints, func(i, j int) bool {
-			priorityOf := func(gp gridPoint) int {
-				if gp.isSelected {
-					return 3
-				}
-				if gp.isCurrent {
-					return 2
-				}
-				if neighborIndices[gp.idx] {
-					return 1
-				}
-				return 0
-			}
-			return priorityOf(gridPoints[i]) < priorityOf(gridPoints[j])
-		})
-
-		for _, gp := range gridPoints {
-			if m.focusMode && !gp.isSelected && !gp.isCurrent && !neighborIndices[gp.idx] {
-				continue
-			}
-
-			var marker string
-			var markerStyle lipgloss.Style
-			var labelStyle lipgloss.Style
-
-			if gp.isSelected {
-				marker = "[*]"
-				markerStyle = selectedDotStyle
-				labelStyle = selectedLabelStyle
-			} else if gp.isCurrent {
-				marker = "●"
-				markerStyle = currentStyle
-				labelStyle = currentStyle
-			} else if neighborIndices[gp.idx] {
-				marker = "◆"
-				markerStyle = neighborDotStyle
-				labelStyle = neighborLabelStyle
-			} else {
-				marker = "○"
-				markerStyle = normalStyle
-				labelStyle = normalStyle
-			}
-
-			markerRunes := []rune(marker)
-			startX := gp.x
-			if gp.isSelected {
-				startX = gp.x - 1
-				if startX < 0 {
-					startX = 0
-				}
-			}
-
-			for j, c := range markerRunes {
-				if startX+j < width {
-					grid[gp.y][startX+j] = canvasCell{char: c, style: markerStyle, isSelected: gp.isSelected, isCurrent: gp.isCurrent}
-				}
-			}
-
-			label := gp.label
-			if len(label) > 12 {
-				label = label[:12]
-			}
-			labelStart := gp.x + len(markerRunes) + 1
-			if gp.isSelected {
-				labelStart = gp.x + 3
-			}
-			for j, c := range label {
-				if labelStart+j < width {
-					grid[gp.y][labelStart+j] = canvasCell{char: c, style: labelStyle}
-				}
-			}
-		}
+		model.renderPointsOnCanvas(canvasGrid, canvasWidth, canvasHeight, styles)
 	}
 
-	var b strings.Builder
-	for i, row := range grid {
-		for _, c := range row {
-			b.WriteString(c.style.Render(string(c.char)))
-		}
-		if i < len(grid)-1 {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
+	// Convert the grid to a renderable string
+	return model.canvasGridToString(canvasGrid)
 }
 
-func drawLine(grid [][]canvasCell, x0, y0, x1, y1 int, style lipgloss.Style) {
-	dx := abs(x1 - x0)
-	dy := abs(y1 - y0)
-	sx := 1
-	if x0 > x1 {
-		sx = -1
-	}
-	sy := 1
-	if y0 > y1 {
-		sy = -1
-	}
-	err := dx - dy
+// canvasStyles holds all the lipgloss styles used for canvas rendering.
+type canvasStyles struct {
+	selectedDotStyle   lipgloss.Style
+	selectedLabelStyle lipgloss.Style
+	currentStyle       lipgloss.Style
+	normalStyle        lipgloss.Style
+	lineStyle          lipgloss.Style
+	neighborDotStyle   lipgloss.Style
+	neighborLabelStyle lipgloss.Style
+}
 
-	for {
-		if y0 >= 0 && y0 < len(grid) && x0 >= 0 && x0 < len(grid[0]) {
-			if grid[y0][x0].char == ' ' {
-				grid[y0][x0] = canvasCell{char: '·', style: style, isLine: true}
-			}
+// initializeCanvasGrid creates a 2D grid of empty canvas cells.
+func (model Model) initializeCanvasGrid(canvasWidth, canvasHeight int) [][]canvasCell {
+	canvasGrid := make([][]canvasCell, canvasHeight)
+	for rowIndex := range canvasGrid {
+		canvasGrid[rowIndex] = make([]canvasCell, canvasWidth)
+		for columnIndex := range canvasGrid[rowIndex] {
+			canvasGrid[rowIndex][columnIndex] = canvasCell{char: ' ', style: lipgloss.NewStyle()}
 		}
-		if x0 == x1 && y0 == y1 {
+	}
+	return canvasGrid
+}
+
+// defineCanvasStyles creates all the styles used for rendering the canvas.
+func (model Model) defineCanvasStyles() canvasStyles {
+	return canvasStyles{
+		selectedDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true),   // Orange for selected dot
+		selectedLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("118")).Bold(true),   // Green for selected word
+		currentStyle:       lipgloss.NewStyle().Foreground(lipgloss.Color("213")),              // Pink for current input
+		normalStyle:        lipgloss.NewStyle().Foreground(lipgloss.Color("239")),              // Dim gray for unselected
+		lineStyle:          lipgloss.NewStyle().Foreground(lipgloss.Color("117")),              // Light blue for connector dots
+		neighborDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true),   // Pink for neighbor dots
+		neighborLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true),   // Yellow for neighbor words
+	}
+}
+
+// renderEmptyCanvasMessage displays a placeholder when no points exist.
+func (model Model) renderEmptyCanvasMessage(canvasGrid [][]canvasCell, canvasWidth, canvasHeight int) {
+	centerRowIndex := canvasHeight / 2
+	placeholderMessage := "No embeddings yet - start typing!"
+	startColumnIndex := (canvasWidth - len(placeholderMessage)) / 2
+	if startColumnIndex < 0 {
+		startColumnIndex = 0
+	}
+	for characterOffset, character := range placeholderMessage {
+		if startColumnIndex+characterOffset < canvasWidth {
+			canvasGrid[centerRowIndex][startColumnIndex+characterOffset] = canvasCell{char: character, style: lipgloss.NewStyle()}
+		}
+	}
+}
+
+// renderPointsOnCanvas draws all points, labels, and connector lines on the canvas.
+func (model Model) renderPointsOnCanvas(canvasGrid [][]canvasCell, canvasWidth, canvasHeight int, styles canvasStyles) {
+	// Calculate the bounding box of all points
+	minimumX, maximumX, minimumY, maximumY := model.calculatePointBounds()
+
+	// Calculate coordinate ranges, avoiding division by zero
+	rangeX := maximumX - minimumX
+	rangeY := maximumY - minimumY
+	if rangeX == 0 {
+		rangeX = 1
+	}
+	if rangeY == 0 {
+		rangeY = 1
+	}
+
+	// Define the plotting area with padding
+	paddingSize := 2
+	plotAreaWidth := canvasWidth - 2*paddingSize
+	plotAreaHeight := canvasHeight - 2*paddingSize
+
+	// Convert 2D projection coordinates to grid positions
+	gridPoints := model.convertPointsToGridPositions(paddingSize, plotAreaWidth, plotAreaHeight, minimumX, rangeX, minimumY, rangeY, canvasWidth, canvasHeight)
+
+	// Identify neighbor points for the selected point
+	neighborPointIndices := model.identifyNeighborIndices(gridPoints)
+
+	// Draw connector lines from selected point to its neighbors
+	model.drawNeighborConnectorLines(canvasGrid, gridPoints, neighborPointIndices, styles.lineStyle)
+
+	// Sort points so highlighted ones render on top (last in draw order)
+	sortedGridPoints := model.sortGridPointsByRenderPriority(gridPoints, neighborPointIndices)
+
+	// Render each point with its marker and label
+	model.renderGridPointsWithLabels(canvasGrid, sortedGridPoints, neighborPointIndices, canvasWidth, styles)
+}
+
+// calculatePointBounds finds the min/max X and Y coordinates across all points.
+func (model Model) calculatePointBounds() (minimumX, maximumX, minimumY, maximumY float64) {
+	minimumX, maximumX = model.points[0].X, model.points[0].X
+	minimumY, maximumY = model.points[0].Y, model.points[0].Y
+
+	for _, point := range model.points {
+		if point.X < minimumX {
+			minimumX = point.X
+		}
+		if point.X > maximumX {
+			maximumX = point.X
+		}
+		if point.Y < minimumY {
+			minimumY = point.Y
+		}
+		if point.Y > maximumY {
+			maximumY = point.Y
+		}
+	}
+	return
+}
+
+// gridPoint represents a point positioned on the canvas grid.
+type gridPoint struct {
+	rowIndex    int
+	columnIndex int
+	pointIndex  int
+	label       string
+	isCurrent   bool
+	isSelected  bool
+}
+
+// convertPointsToGridPositions maps 2D projection coordinates to grid cell positions.
+func (model Model) convertPointsToGridPositions(paddingSize, plotAreaWidth, plotAreaHeight int, minimumX, rangeX, minimumY, rangeY float64, canvasWidth, canvasHeight int) []gridPoint {
+	var gridPoints []gridPoint
+
+	for pointIndex, point := range model.points {
+		// Map normalized coordinates to grid positions
+		columnIndex := paddingSize + int((point.X-minimumX)/rangeX*float64(plotAreaWidth-1))
+		rowIndex := paddingSize + int((point.Y-minimumY)/rangeY*float64(plotAreaHeight-1))
+
+		// Clamp to canvas bounds
+		if columnIndex < 0 {
+			columnIndex = 0
+		}
+		if columnIndex >= canvasWidth {
+			columnIndex = canvasWidth - 1
+		}
+		if rowIndex < 0 {
+			rowIndex = 0
+		}
+		if rowIndex >= canvasHeight {
+			rowIndex = canvasHeight - 1
+		}
+
+		// Determine if this is the current input point (unsaved, marked with ●)
+		isCurrentInputPoint := pointIndex == len(model.points)-1 && strings.HasSuffix(point.Text, " ●")
+		isSelectedPoint := pointIndex == model.selectedIndex
+
+		gridPoints = append(gridPoints, gridPoint{
+			rowIndex:    rowIndex,
+			columnIndex: columnIndex,
+			pointIndex:  pointIndex,
+			label:       point.Text,
+			isCurrent:   isCurrentInputPoint,
+			isSelected:  isSelectedPoint,
+		})
+	}
+
+	return gridPoints
+}
+
+// identifyNeighborIndices finds which point indices are neighbors of the selected point.
+func (model Model) identifyNeighborIndices(gridPoints []gridPoint) map[int]bool {
+	neighborPointIndices := make(map[int]bool)
+
+	for gridPointIndex := range gridPoints {
+		if gridPoints[gridPointIndex].isSelected {
+			neighborIndices := model.findNearestNeighborIndices(model.selectedIndex, 5)
+			for _, neighborIndex := range neighborIndices {
+				neighborPointIndices[neighborIndex] = true
+			}
 			break
 		}
-		e2 := 2 * err
-		if e2 > -dy {
-			err -= dy
-			x0 += sx
+	}
+
+	return neighborPointIndices
+}
+
+// drawNeighborConnectorLines draws lines from the selected point to its neighbors.
+func (model Model) drawNeighborConnectorLines(canvasGrid [][]canvasCell, gridPoints []gridPoint, neighborPointIndices map[int]bool, lineStyle lipgloss.Style) {
+	// Find the selected grid point
+	var selectedGridPoint *gridPoint
+	for gridPointIndex := range gridPoints {
+		if gridPoints[gridPointIndex].isSelected {
+			selectedGridPoint = &gridPoints[gridPointIndex]
+			break
 		}
-		if e2 < dx {
-			err += dx
-			y0 += sy
+	}
+
+	// Draw lines to each neighbor point
+	if selectedGridPoint != nil {
+		for _, targetGridPoint := range gridPoints {
+			if neighborPointIndices[targetGridPoint.pointIndex] {
+				drawLineOnCanvas(canvasGrid, selectedGridPoint.columnIndex, selectedGridPoint.rowIndex, targetGridPoint.columnIndex, targetGridPoint.rowIndex, lineStyle)
+			}
 		}
 	}
 }
 
-func abs(x int) int {
-	if x < 0 {
-		return -x
+// sortGridPointsByRenderPriority orders points so highlighted ones draw last (on top).
+// Order: unselected -> neighbors -> current input -> selected
+func (model Model) sortGridPointsByRenderPriority(gridPoints []gridPoint, neighborPointIndices map[int]bool) []gridPoint {
+	sortedPoints := make([]gridPoint, len(gridPoints))
+	copy(sortedPoints, gridPoints)
+
+	sort.SliceStable(sortedPoints, func(firstIndex, secondIndex int) bool {
+		calculateRenderPriority := func(point gridPoint) int {
+			if point.isSelected {
+				return 3 // Highest priority - render last (on top)
+			}
+			if point.isCurrent {
+				return 2
+			}
+			if neighborPointIndices[point.pointIndex] {
+				return 1
+			}
+			return 0 // Lowest priority - render first (underneath)
+		}
+		return calculateRenderPriority(sortedPoints[firstIndex]) < calculateRenderPriority(sortedPoints[secondIndex])
+	})
+
+	return sortedPoints
+}
+
+// renderGridPointsWithLabels draws markers and labels for each point on the canvas.
+func (model Model) renderGridPointsWithLabels(canvasGrid [][]canvasCell, gridPoints []gridPoint, neighborPointIndices map[int]bool, canvasWidth int, styles canvasStyles) {
+	for _, point := range gridPoints {
+		// Determine the marker symbol and styles based on point state
+		var markerSymbol string
+		var markerStyle lipgloss.Style
+		var labelStyle lipgloss.Style
+
+		if point.isSelected {
+			markerSymbol = "[*]"
+			markerStyle = styles.selectedDotStyle
+			labelStyle = styles.selectedLabelStyle
+		} else if point.isCurrent {
+			markerSymbol = "●"
+			markerStyle = styles.currentStyle
+			labelStyle = styles.currentStyle
+		} else if neighborPointIndices[point.pointIndex] {
+			markerSymbol = "◆"
+			markerStyle = styles.neighborDotStyle
+			labelStyle = styles.neighborLabelStyle
+		} else {
+			markerSymbol = "○"
+			markerStyle = styles.normalStyle
+			labelStyle = styles.normalStyle
+		}
+
+		// Calculate marker starting position (selected marker is wider)
+		markerRunes := []rune(markerSymbol)
+		markerStartColumn := point.columnIndex
+		if point.isSelected {
+			markerStartColumn = point.columnIndex - 1
+			if markerStartColumn < 0 {
+				markerStartColumn = 0
+			}
+		}
+
+		// Draw the marker character(s)
+		for runeOffset, markerRune := range markerRunes {
+			if markerStartColumn+runeOffset < canvasWidth {
+				canvasGrid[point.rowIndex][markerStartColumn+runeOffset] = canvasCell{
+					char:       markerRune,
+					style:      markerStyle,
+					isSelected: point.isSelected,
+					isCurrent:  point.isCurrent,
+				}
+			}
+		}
+
+		// Truncate and render the label next to the marker
+		labelText := point.label
+		if len(labelText) > 12 {
+			labelText = labelText[:12]
+		}
+		labelStartColumn := point.columnIndex + len(markerRunes) + 1
+		if point.isSelected {
+			labelStartColumn = point.columnIndex + 3
+		}
+		for characterOffset, labelCharacter := range labelText {
+			if labelStartColumn+characterOffset < canvasWidth {
+				canvasGrid[point.rowIndex][labelStartColumn+characterOffset] = canvasCell{char: labelCharacter, style: labelStyle}
+			}
+		}
 	}
-	return x
+}
+
+// canvasGridToString converts the 2D canvas grid into a renderable string.
+func (model Model) canvasGridToString(canvasGrid [][]canvasCell) string {
+	var outputBuilder strings.Builder
+
+	for rowIndex, gridRow := range canvasGrid {
+		for _, cell := range gridRow {
+			outputBuilder.WriteString(cell.style.Render(string(cell.char)))
+		}
+		// Add newline between rows, but not after the last row
+		if rowIndex < len(canvasGrid)-1 {
+			outputBuilder.WriteString("\n")
+		}
+	}
+
+	return outputBuilder.String()
+}
+
+// drawLineOnCanvas uses Bresenham's line algorithm to draw a line between two points.
+// Bresenham's algorithm efficiently determines which cells to fill when drawing a line
+// by tracking accumulated error and adjusting the position accordingly.
+func drawLineOnCanvas(canvasGrid [][]canvasCell, startX, startY, endX, endY int, lineStyle lipgloss.Style) {
+	// Calculate the absolute distance to travel in each dimension
+	deltaX := absoluteValue(endX - startX)
+	deltaY := absoluteValue(endY - startY)
+
+	// Determine the direction of travel for each axis (1 = positive, -1 = negative)
+	stepDirectionX := 1
+	if startX > endX {
+		stepDirectionX = -1
+	}
+	stepDirectionY := 1
+	if startY > endY {
+		stepDirectionY = -1
+	}
+
+	// Initialize error term - this tracks when we need to step in the steeper direction
+	// The error term represents the difference between ideal line position and current grid position
+	errorTerm := deltaX - deltaY
+
+	// Current position starts at the line's start point
+	currentX := startX
+	currentY := startY
+
+	// Main loop: continue until we reach the end point
+	for {
+		// Draw a dot at the current position if within bounds and cell is empty
+		if currentY >= 0 && currentY < len(canvasGrid) && currentX >= 0 && currentX < len(canvasGrid[0]) {
+			if canvasGrid[currentY][currentX].char == ' ' {
+				canvasGrid[currentY][currentX] = canvasCell{char: '·', style: lineStyle, isLine: true}
+			}
+		}
+
+		// Check if we've reached the destination
+		if currentX == endX && currentY == endY {
+			break
+		}
+
+		// Calculate doubled error to avoid floating point arithmetic
+		// This is the key insight of Bresenham's algorithm
+		doubledError := 2 * errorTerm
+
+		// If error indicates we should step in X direction
+		if doubledError > -deltaY {
+			errorTerm -= deltaY
+			currentX += stepDirectionX
+		}
+
+		// If error indicates we should step in Y direction
+		if doubledError < deltaX {
+			errorTerm += deltaX
+			currentY += stepDirectionY
+		}
+	}
+}
+
+// absoluteValue returns the absolute value of an integer.
+func absoluteValue(number int) int {
+	if number < 0 {
+		return -number
+	}
+	return number
 }
