@@ -148,9 +148,6 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		model.showMetadata = !model.showMetadata
 
-	case "h":
-		model.hideUnrelated = !model.hideUnrelated
-
 	case "D":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
 			return model, model.deleteSelected()
@@ -427,12 +424,12 @@ func (model Model) View() string {
 	}
 
 	help := "Up/Down: select | /: metadata | F: focus | D: delete | Enter: save | Esc: quit"
-	versionLabel := m.version
+	versionLabel := model.version
 	padding := totalWidth - len(help) - len(versionLabel)
 	if padding < 1 {
 		padding = 1
 	}
-	outputBuilder.WriteString(helpStyle.Render(helpText + strings.Repeat(" ", paddingSpaces) + versionLabel))
+	outputBuilder.WriteString(helpStyle.Render(help + strings.Repeat(" ", padding) + versionLabel))
 
 	return lipgloss.NewStyle().Padding(1, marginSize).Render(outputBuilder.String())
 }
@@ -893,8 +890,8 @@ func (model Model) renderGridPointsWithLabels(canvasGrid [][]canvasCell, gridPoi
 	hasSelection := model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints)
 
 	for _, point := range gridPoints {
-		// When hide mode is enabled and a point is selected, hide unrelated points to show connector lines clearly
-		if model.hideUnrelated && hasSelection && !point.isSelected && !point.isCurrent && !neighborPointIndices[point.pointIndex] {
+		// When focus mode is enabled and a point is selected, hide unrelated points to show connector lines clearly
+		if model.focusMode && hasSelection && !point.isSelected && !point.isCurrent && !neighborPointIndices[point.pointIndex] {
 			continue
 		}
 
