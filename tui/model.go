@@ -32,6 +32,7 @@ type Model struct {
 	savedTexts     []string
 	selectedIndex  int
 	showMetadata   bool
+	focusMode      bool
 	version        string
 }
 
@@ -134,6 +135,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "/":
 			m.showMetadata = !m.showMetadata
+		case "F":
+			m.focusMode = !m.focusMode
 		case "D":
 			if m.selectedIndex >= 0 && m.selectedIndex < len(m.storedPoints) {
 				return m, m.deleteSelected()
@@ -335,7 +338,7 @@ func (m Model) View() string {
 		b.WriteString(errStyle.Render("Error: "+m.err.Error()) + "\n")
 	}
 
-	help := "Up/Down: select | /: metadata | D: delete | Enter: save | Esc: quit"
+	help := "Up/Down: select | /: metadata | F: focus | D: delete | Enter: save | Esc: quit"
 	versionLabel := m.version
 	padding := totalWidth - len(help) - len(versionLabel)
 	if padding < 1 {
@@ -653,6 +656,10 @@ func (m Model) renderCanvas(width, height int) string {
 		})
 
 		for _, gp := range gridPoints {
+			if m.focusMode && !gp.isSelected && !gp.isCurrent && !neighborIndices[gp.idx] {
+				continue
+			}
+
 			var marker string
 			var markerStyle lipgloss.Style
 			var labelStyle lipgloss.Style
