@@ -273,6 +273,10 @@ func (model Model) handleEmbeddingResult(result embeddingResult) (tea.Model, tea
 	if model.currentVec != nil {
 		return model, model.updateVisualization()
 	}
+	// Input was cleared - reproject without the current vector to remove stale point
+	if model.input == "" {
+		return model, model.reproject()
+	}
 	return model, nil
 }
 
@@ -434,7 +438,7 @@ func (model Model) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	inputBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
-	canvasBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+	canvasBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("208"))
 	metadataBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
 
 	var outputBuilder strings.Builder
