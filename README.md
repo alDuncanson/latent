@@ -53,9 +53,26 @@ latent --preload          # Seed with demo word list
 latent --version          # Print version
 ```
 
-### Batch Import
+### Hugging Face Datasets
 
-Import many texts at once from CSV or JSON files:
+Import datasets directly from Hugging Face using the Dataset Viewer API:
+
+```bash
+latent --hf-dataset cornell-movie-review-data/rotten_tomatoes
+latent --hf-dataset imdb --hf-split test --hf-max-rows 50
+latent --hf-dataset squad --hf-column question --hf-max-rows 200
+```
+
+| Flag            | Default   | Description                          |
+| --------------- | --------- | ------------------------------------ |
+| `--hf-dataset`  |           | Dataset name (e.g., `imdb`, `squad`) |
+| `--hf-split`    | `train`   | Dataset split to use                 |
+| `--hf-column`   | `text`    | Column containing text to embed      |
+| `--hf-max-rows` | `100`     | Maximum rows to fetch                |
+
+### Local File Import
+
+Import texts from local CSV or JSON files:
 
 **CSV format** - requires a `text` column header:
 
@@ -114,25 +131,4 @@ Datasets with semantically similar terms (e.g., all physics terms) may produce
 fewer clusters since the points are spread evenly rather than forming dense
 pockets.
 
-## Test Data
 
-The `testdata/` directory contains sample files demonstrating supported import
-formats:
-
-| File                  | Format            | Description                               |
-| --------------------- | ----------------- | ----------------------------------------- |
-| `vehicles.json`       | JSON string array | Transportation terms (cars, planes, etc.) |
-| `science.csv`         | CSV               | Physics and biology terms                 |
-| `professions.json`    | JSON object array | Jobs and careers                          |
-| `geography.csv`       | CSV               | Landforms and terrain                     |
-| `mixed_categories.json` | JSON string array | 5 distinct groups for visible clustering  |
-
-Example usage:
-
-```bash
-latent testdata/mixed_categories.json
-```
-
-The `mixed_categories.json` file works best for demonstrating clustering since
-it contains 5 semantically distinct groups (tools, flowers, planets, clothing,
-coffee drinks) with 8 terms each.
