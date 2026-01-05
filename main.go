@@ -1,7 +1,7 @@
 // Package main provides the entry point for latent, a terminal UI application
-// for visualizing text embeddings. It connects to Ollama for generating embeddings
-// and Qdrant for vector storage, then projects high-dimensional vectors to 2D
-// using PCA for interactive visualization.
+// for visualizing text embeddings. It connects to Ollama or Hugging Face for
+// generating embeddings and Qdrant for vector storage, then projects
+// high-dimensional vectors to 2D using PCA for interactive visualization.
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/alDuncanson/latent/dataimport"
+	"github.com/alDuncanson/latent/embedding"
 	"github.com/alDuncanson/latent/huggingface"
 	"github.com/alDuncanson/latent/ollama"
 	"github.com/alDuncanson/latent/preload"
@@ -24,35 +25,32 @@ import (
 // version is set at build time via ldflags, defaults to "dev" for local builds
 var version = "dev"
 
-// Service configuration constants for connecting to backend services
+// Default service configuration constants
 const (
-	// ollamaServiceURL is the HTTP endpoint for the Ollama embedding service
-	ollamaServiceURL = "http://localhost:11434"
-
-	// embeddingModelName specifies which Ollama model to use for text embeddings
-	embeddingModelName = "nomic-embed-text"
-
-	// qdrantServiceAddress is the gRPC endpoint for the Qdrant vector database
+	ollamaServiceURL     = "http://localhost:11434"
+	defaultOllamaModel   = "nomic-embed-text"
+	defaultHFModel       = "sentence-transformers/all-MiniLM-L6-v2"
 	qdrantServiceAddress = "localhost:6334"
-
-	// vectorCollectionName is the Qdrant collection where embeddings are stored
 	vectorCollectionName = "embeddings"
-
-	// embeddingVectorDimensions is the size of vectors produced by nomic-embed-text
-	embeddingVectorDimensions = 768
 )
 
 func main() {
-	// Parse command-line flags for version display and demo data preloading
+	// Parse command-line flags
 	showVersionFlag := flag.Bool("version", false, "print version and exit")
 	preloadDemoDataFlag := flag.Bool("preload", false, "seed with demo word list")
 	hfDatasetFlag := flag.String("hf-dataset", "", "Hugging Face dataset to import (e.g., cornell-movie-review-data/rotten_tomatoes)")
 	hfSplitFlag := flag.String("hf-split", "train", "dataset split to use (default: train)")
 	hfColumnFlag := flag.String("hf-column", "text", "column containing text to embed (default: text)")
 	hfMaxRowsFlag := flag.Int("hf-max-rows", 100, "maximum rows to fetch from Hugging Face (default: 100)")
+
+	// Embedder configuration flags
+	embedderFlag := flag.String("embedder", "ollama", "embedding provider: ollama or huggingface")
+	modelFlag := flag.String("model", "", "model name (default: nomic-embed-text for ollama, sentence-transformers/all-MiniLM-L6-v2 for huggingface)")
+	embeddingDimFlag := flag.Int("embedding-dim", 768, "embedding vector dimensions (must match model output)")
+	hfTokenFlag := flag.String("hf-token", "", "Hugging Face API token (or set HF_TOKEN env var)")
+
 	flag.Parse()
 
-	// Handle version flag: print version and exit early
 	if *showVersionFlag {
 		fmt.Println(version)
 		return
@@ -64,14 +62,31 @@ func main() {
 		datasetPath = flag.Arg(0)
 	}
 
-	// Initialize the Ollama client for generating text embeddings
-	ollamaEmbeddingClient := ollama.NewClient(ollamaServiceURL, embeddingModelName)
+	// Initialize the embedder based on the selected provider
+	var embedder embedding.Embedder
+	switch *embedderFlag {
+	case "ollama":
+		modelName := *modelFlag
+		if modelName == "" {
+			modelName = defaultOllamaModel
+		}
+		embedder = ollama.NewClient(ollamaServiceURL, modelName)
+	case "huggingface", "hf":
+		modelName := *modelFlag
+		if modelName == "" {
+			modelName = defaultHFModel
+		}
+		embedder = huggingface.NewEmbeddingsClient(modelName, *hfTokenFlag)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown embedder: %s (use 'ollama' or 'huggingface')\n", *embedderFlag)
+		os.Exit(1)
+	}
 
 	// Initialize the Qdrant client for vector storage and retrieval
 	qdrantVectorClient, connectionError := qdrant.NewClient(
 		qdrantServiceAddress,
 		vectorCollectionName,
-		embeddingVectorDimensions,
+		uint64(*embeddingDimFlag),
 	)
 	if connectionError != nil {
 		fmt.Fprintf(os.Stderr, "Failed to connect to Qdrant: %v\n", connectionError)
@@ -82,7 +97,7 @@ func main() {
 
 	// If preload flag is set, seed the database with demo words before starting the UI
 	if *preloadDemoDataFlag {
-		preloadError := runPreloadDemoWords(ollamaEmbeddingClient, qdrantVectorClient)
+		preloadError := runPreloadDemoWords(embedder, qdrantVectorClient)
 		if preloadError != nil {
 			fmt.Fprintf(os.Stderr, "Preload failed: %v\n", preloadError)
 			os.Exit(1)
@@ -91,7 +106,7 @@ func main() {
 
 	// If a dataset path was provided, import it
 	if datasetPath != "" {
-		importError := runImportDataset(ollamaEmbeddingClient, qdrantVectorClient, datasetPath)
+		importError := runImportDataset(embedder, qdrantVectorClient, datasetPath)
 		if importError != nil {
 			fmt.Fprintf(os.Stderr, "Import failed: %v\n", importError)
 			os.Exit(1)
@@ -101,7 +116,7 @@ func main() {
 	// If a Hugging Face dataset was specified, fetch and import it
 	if *hfDatasetFlag != "" {
 		importError := runImportHuggingFace(
-			ollamaEmbeddingClient,
+			embedder,
 			qdrantVectorClient,
 			*hfDatasetFlag,
 			*hfSplitFlag,
@@ -115,7 +130,7 @@ func main() {
 	}
 
 	// Create and run the terminal user interface
-	terminalUserInterfaceModel := tui.NewModel(ollamaEmbeddingClient, qdrantVectorClient, version)
+	terminalUserInterfaceModel := tui.NewModel(embedder, qdrantVectorClient, version)
 	bubbleTeaProgram := tea.NewProgram(terminalUserInterfaceModel, tea.WithAltScreen())
 
 	_, programRunError := bubbleTeaProgram.Run()
@@ -126,30 +141,24 @@ func main() {
 }
 
 // runPreloadDemoWords seeds the Qdrant database with a predefined list of demo words.
-// It generates embeddings for each word using Ollama and stores them in Qdrant.
-// Progress is displayed to stdout as each word is processed.
-func runPreloadDemoWords(ollamaEmbeddingClient *ollama.Client, qdrantVectorClient *qdrant.Client) error {
+func runPreloadDemoWords(embedder embedding.Embedder, qdrantVectorClient *qdrant.Client) error {
 	demoWordList := preload.Words()
 	backgroundContext := context.Background()
 
 	fmt.Printf("Preloading %d words...\n", len(demoWordList))
 
-	// Process each word: generate embedding and store in vector database
 	for wordIndex, currentWord := range demoWordList {
-		// Generate the embedding vector for the current word
-		embeddingVector, embeddingError := ollamaEmbeddingClient.Embed(currentWord)
+		embeddingVector, embeddingError := embedder.Embed(currentWord)
 		if embeddingError != nil {
 			return fmt.Errorf("embed %q: %w", currentWord, embeddingError)
 		}
 
-		// Store the word and its embedding in Qdrant with a unique identifier
 		uniquePointIdentifier := uuid.New().String()
 		upsertError := qdrantVectorClient.Upsert(backgroundContext, uniquePointIdentifier, currentWord, embeddingVector)
 		if upsertError != nil {
 			return fmt.Errorf("upsert %q: %w", currentWord, upsertError)
 		}
 
-		// Display progress on the same line using carriage return
 		fmt.Printf("\r[%d/%d] %s", wordIndex+1, len(demoWordList), currentWord)
 	}
 
@@ -158,7 +167,7 @@ func runPreloadDemoWords(ollamaEmbeddingClient *ollama.Client, qdrantVectorClien
 }
 
 // runImportDataset loads texts from a CSV or JSON file and embeds them into Qdrant.
-func runImportDataset(ollamaEmbeddingClient *ollama.Client, qdrantVectorClient *qdrant.Client, datasetPath string) error {
+func runImportDataset(embedder embedding.Embedder, qdrantVectorClient *qdrant.Client, datasetPath string) error {
 	texts, loadError := dataimport.LoadTexts(datasetPath)
 	if loadError != nil {
 		return fmt.Errorf("loading dataset: %w", loadError)
@@ -172,7 +181,7 @@ func runImportDataset(ollamaEmbeddingClient *ollama.Client, qdrantVectorClient *
 	fmt.Printf("Importing %d texts from %s...\n", len(texts), datasetPath)
 
 	for textIndex, currentText := range texts {
-		embeddingVector, embeddingError := ollamaEmbeddingClient.Embed(currentText)
+		embeddingVector, embeddingError := embedder.Embed(currentText)
 		if embeddingError != nil {
 			return fmt.Errorf("embed %q: %w", currentText, embeddingError)
 		}
@@ -198,10 +207,9 @@ func truncateForProgress(text string, maxLen int) string {
 }
 
 // runImportHuggingFace fetches texts from a Hugging Face dataset and embeds them into Qdrant.
-func runImportHuggingFace(ollamaEmbeddingClient *ollama.Client, qdrantVectorClient *qdrant.Client, dataset, split, column string, maxRows int) error {
+func runImportHuggingFace(embedder embedding.Embedder, qdrantVectorClient *qdrant.Client, dataset, split, column string, maxRows int) error {
 	hfClient := huggingface.NewClient()
 
-	// First, get splits to determine the config
 	splits, splitsError := hfClient.GetSplits(dataset)
 	if splitsError != nil {
 		return fmt.Errorf("fetching splits: %w", splitsError)
@@ -211,7 +219,6 @@ func runImportHuggingFace(ollamaEmbeddingClient *ollama.Client, qdrantVectorClie
 		return fmt.Errorf("no splits found for dataset %s", dataset)
 	}
 
-	// Find the matching split and get its config
 	var config string
 	for _, s := range splits.Splits {
 		if s.Split == split {
@@ -240,7 +247,7 @@ func runImportHuggingFace(ollamaEmbeddingClient *ollama.Client, qdrantVectorClie
 	fmt.Printf("Importing %d texts...\n", len(texts))
 
 	for textIndex, currentText := range texts {
-		embeddingVector, embeddingError := ollamaEmbeddingClient.Embed(currentText)
+		embeddingVector, embeddingError := embedder.Embed(currentText)
 		if embeddingError != nil {
 			return fmt.Errorf("embed %q: %w", truncateForProgress(currentText, 20), embeddingError)
 		}

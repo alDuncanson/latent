@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alDuncanson/latent/ollama"
+	"github.com/alDuncanson/latent/embedding"
 	"github.com/alDuncanson/latent/projection"
 	"github.com/alDuncanson/latent/qdrant"
 
@@ -25,7 +25,7 @@ type Model struct {
 	points          []projection.Point2D
 	storedPoints    []qdrant.Point
 	currentVec      []float32
-	ollama          *ollama.Client
+	embedder        embedding.Embedder
 	qdrant          *qdrant.Client
 	err             error
 	debounceTimer   *time.Timer
@@ -58,9 +58,9 @@ type pointsUpdated struct {
 }
 
 // NewModel creates and initializes a new TUI Model with the given clients and version.
-func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client, version string) Model {
+func NewModel(embedder embedding.Embedder, qdrantClient *qdrant.Client, version string) Model {
 	return Model{
-		ollama:        ollamaClient,
+		embedder:      embedder,
 		qdrant:        qdrantClient,
 		width:         80,
 		height:        24,
@@ -440,13 +440,13 @@ func (model Model) handlePointsUpdated(update pointsUpdated) (tea.Model, tea.Cmd
 // debounceEmbed waits briefly before computing an embedding to avoid excessive API calls.
 func (model *Model) debounceEmbed() tea.Cmd {
 	inputText := model.input
-	ollamaClient := model.ollama
+	embedder := model.embedder
 	return func() tea.Msg {
 		time.Sleep(150 * time.Millisecond)
 		if inputText == "" {
 			return embeddingResult{}
 		}
-		embeddingVector, err := ollamaClient.Embed(inputText)
+		embeddingVector, err := embedder.Embed(inputText)
 		return embeddingResult{vector: embeddingVector, err: err}
 	}
 }
