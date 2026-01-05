@@ -31,13 +31,17 @@ type Model struct {
 	debounceTimer   *time.Timer
 	embedding       bool
 	savedTexts      []string
-	selectedIndex   int
-	showMetadata    bool
-	focusMode       bool
-	useUMAP         bool
-	showClusters    bool
-	clusterLabels   []int
-	version         string
+	selectedIndex      int
+	showMetadata       bool
+	showLabels         bool
+	focusMode          bool
+	useUMAP            bool
+	showClusters       bool
+	clusterLabels      []int
+	version            string
+	metadataScrollPos  int
+	activeTab          viewTab
+	inputMode          inputMode
 }
 
 // embeddingResult is the message returned after computing an embedding vector.
@@ -62,6 +66,7 @@ func NewModel(ollamaClient *ollama.Client, qdrantClient *qdrant.Client, version 
 		height:        24,
 		selectedIndex: -1,
 		showMetadata:  true,
+		showLabels:    true,
 		version:       version,
 	}
 }
@@ -184,28 +189,82 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKeyPress processes keyboard input and returns the updated model and any commands.
 func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.inputMode == modeInput {
+		return model.handleInputModeKey(keyMessage)
+	}
+	return model.handleNormalModeKey(keyMessage)
+}
+
+// handleInputModeKey handles keys when in input mode.
+func (model Model) handleInputModeKey(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch keyMessage.String() {
+	case "esc":
+		model.inputMode = modeNormal
+		model.input = ""
+		model.cursorPos = 0
+		model.currentVec = nil
+		return model, model.reproject()
+
+	case "enter":
+		if model.input != "" && model.currentVec != nil {
+			saveCommand := model.saveCurrentEmbedding()
+			model.input = ""
+			model.cursorPos = 0
+			model.currentVec = nil
+			model.inputMode = modeNormal
+			return model, saveCommand
+		}
+		return model, nil
+
+	case "backspace":
+		if model.cursorPos > 0 {
+			model.input = model.input[:model.cursorPos-1] + model.input[model.cursorPos:]
+			model.cursorPos--
+			return model, model.debounceEmbed()
+		}
+		return model, nil
+
+	case "left":
+		if model.cursorPos > 0 {
+			model.cursorPos--
+		}
+
+	case "right":
+		if model.cursorPos < len(model.input) {
+			model.cursorPos++
+		}
+
+	default:
+		keyString := keyMessage.String()
+		if len(keyString) == 1 {
+			model.input = model.input[:model.cursorPos] + keyString + model.input[model.cursorPos:]
+			model.cursorPos++
+			return model, model.debounceEmbed()
+		}
+	}
+
+	return model, nil
+}
+
+// handleNormalModeKey handles keys when in normal mode.
+func (model Model) handleNormalModeKey(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch keyMessage.String() {
 	case "ctrl+c", "esc":
 		return model, tea.Quit
 
-	case "enter":
-		return model.handleEnterKey()
-
-	case "backspace":
-		return model.handleBackspace()
+	case "I", "i":
+		model.inputMode = modeInput
+		model.input = ""
+		model.cursorPos = 0
 
 	case "left":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
 			model.selectPreviousInNeighborhood()
-		} else if model.cursorPos > 0 {
-			model.cursorPos--
 		}
 
 	case "right":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
 			model.selectNextInNeighborhood()
-		} else if model.cursorPos < len(model.input) {
-			model.cursorPos++
 		}
 
 	case "tab":
@@ -222,6 +281,7 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "/":
 		model.showMetadata = !model.showMetadata
+		model.metadataScrollPos = 0
 
 	case "F":
 		model.focusMode = !model.focusMode
@@ -234,37 +294,34 @@ func (model Model) handleKeyPress(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
 		model.showClusters = !model.showClusters
 		return model, model.reproject()
 
+	case "L":
+		model.showLabels = !model.showLabels
+
+	case "J":
+		if model.showMetadata {
+			model.metadataScrollPos++
+		}
+
+	case "K":
+		if model.showMetadata && model.metadataScrollPos > 0 {
+			model.metadataScrollPos--
+		}
+
 	case "D":
 		if model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints) {
 			return model, model.deleteSelected()
 		}
 
-	default:
-		return model.handleCharacterInput(keyMessage)
+	case "1":
+		model.activeTab = tabProjection
+
+	case "2":
+		model.activeTab = tabList
+
+	case "3":
+		model.activeTab = tabStats
 	}
 
-	return model, nil
-}
-
-// handleEnterKey saves the current embedding when Enter is pressed.
-func (model Model) handleEnterKey() (tea.Model, tea.Cmd) {
-	if model.input != "" && model.currentVec != nil {
-		saveCommand := model.saveCurrentEmbedding()
-		model.input = ""
-		model.cursorPos = 0
-		model.currentVec = nil
-		return model, saveCommand
-	}
-	return model, nil
-}
-
-// handleBackspace removes the character before the cursor and triggers re-embedding.
-func (model Model) handleBackspace() (tea.Model, tea.Cmd) {
-	if model.cursorPos > 0 {
-		model.input = model.input[:model.cursorPos-1] + model.input[model.cursorPos:]
-		model.cursorPos--
-		return model, model.debounceEmbed()
-	}
 	return model, nil
 }
 
@@ -336,17 +393,6 @@ func (model *Model) selectPreviousInNeighborhood() {
 		prevPos = len(neighborhood) - 1
 	}
 	model.selectedIndex = neighborhood[prevPos]
-}
-
-// handleCharacterInput inserts a typed character at the cursor position.
-func (model Model) handleCharacterInput(keyMessage tea.KeyMsg) (tea.Model, tea.Cmd) {
-	keyString := keyMessage.String()
-	if len(keyString) == 1 {
-		model.input = model.input[:model.cursorPos] + keyString + model.input[model.cursorPos:]
-		model.cursorPos++
-		return model, model.debounceEmbed()
-	}
-	return model, nil
 }
 
 // handleEmbeddingResult processes the result of an embedding computation.
@@ -519,89 +565,47 @@ func (model *Model) updateVisualization() tea.Cmd {
 
 // View renders the complete UI as a string.
 func (model Model) View() string {
-	marginSize := 1
-	gapSize := 1
-	totalWidth := model.width - marginSize*2
+	s := newStyles()
+	layout := model.calculateLayout()
 
-	// Define UI styles
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	inputBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
-	canvasBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("208"))
-	metadataBorderStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+	var sections []string
 
-	var outputBuilder strings.Builder
+	sections = append(sections, model.renderTabBar(s, layout.totalWidth))
+	sections = append(sections, model.renderContentArea(s, layout))
 
-	// Render title
-	outputBuilder.WriteString(titleStyle.Render("latent"))
-	outputBuilder.WriteString("\n")
-
-	// Prepare input display with optional embedding indicator
-	inputDisplayText := model.input
-	if model.embedding {
-		inputDisplayText += " (embedding...)"
+	if errStr := model.renderError(s); errStr != "" {
+		sections = append(sections, errStr)
 	}
 
-	// Calculate canvas dimensions
-	canvasHeight := model.height - 9
-	if canvasHeight < 10 {
-		canvasHeight = 10
+	sections = append(sections, model.renderStatusBar(s, layout.totalWidth))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return lipgloss.NewStyle().Padding(1, 1).Render(content)
+}
+
+// wrapText wraps text to fit within the specified width.
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
 	}
 
-	// Determine whether to show the metadata panel
-	shouldShowMetadata := model.showMetadata && model.selectedIndex >= 0 && model.selectedIndex < len(model.storedPoints)
-
-	if shouldShowMetadata {
-		// Layout with metadata panel on the right
-		metadataPanelOuterWidth := 26
-		metadataPanelInnerWidth := metadataPanelOuterWidth - 4
-		canvasInnerWidth := totalWidth - metadataPanelOuterWidth - gapSize - 2
-
-		outputBuilder.WriteString(inputBorderStyle.Width(totalWidth - 4).Render(inputDisplayText))
-		outputBuilder.WriteString("\n")
-
-		canvasContent := model.renderCanvas(canvasInnerWidth, canvasHeight)
-		metadataContent := model.renderMetadata(metadataPanelInnerWidth, canvasHeight-1)
-
-		leftPanel := canvasBorderStyle.Width(canvasInnerWidth).Render(canvasContent)
-		rightPanel := metadataBorderStyle.Width(metadataPanelInnerWidth).Height(canvasHeight - 1).Render(metadataContent)
-
-		outputBuilder.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, strings.Repeat(" ", gapSize), rightPanel))
-	} else {
-		// Full-width canvas layout without metadata panel
-		canvasInnerWidth := totalWidth - 4
-
-		outputBuilder.WriteString(inputBorderStyle.Width(canvasInnerWidth).Render(inputDisplayText))
-		outputBuilder.WriteString("\n")
-
-		canvasContent := model.renderCanvas(canvasInnerWidth, canvasHeight)
-		outputBuilder.WriteString(canvasBorderStyle.Width(canvasInnerWidth).Render(canvasContent))
-	}
-	outputBuilder.WriteString("\n")
-
-	// Render error message if present
-	if model.err != nil {
-		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-		outputBuilder.WriteString(errorStyle.Render("Error: "+model.err.Error()) + "\n")
+	var lines []string
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
 	}
 
-	projectionMethod := "PCA"
-	if model.useUMAP {
-		projectionMethod = "UMAP"
+	currentLine := words[0]
+	for _, word := range words[1:] {
+		if len(currentLine)+1+len(word) <= width {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word
+		}
 	}
-	clusterStatus := "off"
-	if model.showClusters {
-		clusterStatus = "on"
-	}
-	help := "Up/Down: select | /: metadata | F: focus | P: " + projectionMethod + " | C: clusters " + clusterStatus + " | D: delete | Esc: quit"
-	versionLabel := model.version
-	padding := totalWidth - len(help) - len(versionLabel)
-	if padding < 1 {
-		padding = 1
-	}
-	outputBuilder.WriteString(helpStyle.Render(help + strings.Repeat(" ", padding) + versionLabel))
-
-	return lipgloss.NewStyle().Padding(1, marginSize).Render(outputBuilder.String())
+	lines = append(lines, currentLine)
+	return lines
 }
 
 // renderMetadata generates the metadata panel content for the selected point.
@@ -614,17 +618,22 @@ func (model Model) renderMetadata(panelWidth, panelHeight int) string {
 	var contentLines []string
 
 	// Define metadata panel styles
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF87D7"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C"))
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EEEEEE"))
+	scrollHintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C")).Italic(true)
 
-	// Section: Selected point info
-	contentLines = append(contentLines, headerStyle.Render("Selected"))
-	contentLines = append(contentLines, valueStyle.Render(truncateString(selectedPoint.Text, panelWidth)))
+	// Section: Full text with word wrapping
+	contentLines = append(contentLines, headerStyle.Render("Text"))
+	wrappedText := wrapText(selectedPoint.Text, panelWidth)
+	for _, line := range wrappedText {
+		contentLines = append(contentLines, valueStyle.Render(line))
+	}
 	contentLines = append(contentLines, "")
 
 	// Section: Vector statistics
 	if len(selectedPoint.Vector) > 0 {
+		contentLines = append(contentLines, headerStyle.Render("Stats"))
 		contentLines = append(contentLines, labelStyle.Render("Dim: ")+valueStyle.Render(fmt.Sprintf("%d", len(selectedPoint.Vector))))
 
 		minimumValue, maximumValue, meanValue := computeVectorStatistics(selectedPoint.Vector)
@@ -655,15 +664,48 @@ func (model Model) renderMetadata(panelWidth, panelHeight int) string {
 		}
 	}
 
-	// Pad or truncate to fit panel height
-	for len(contentLines) < panelHeight {
-		contentLines = append(contentLines, "")
+	// Apply scrolling
+	totalLines := len(contentLines)
+	scrollPos := model.metadataScrollPos
+
+	// Clamp scroll position
+	maxScroll := totalLines - panelHeight + 1
+	if maxScroll < 0 {
+		maxScroll = 0
 	}
-	if len(contentLines) > panelHeight {
-		contentLines = contentLines[:panelHeight]
+	if scrollPos > maxScroll {
+		scrollPos = maxScroll
 	}
 
-	return strings.Join(contentLines, "\n")
+	// Extract visible window
+	startLine := scrollPos
+	endLine := scrollPos + panelHeight - 1
+	if endLine > totalLines {
+		endLine = totalLines
+	}
+
+	var visibleLines []string
+	if startLine < totalLines {
+		visibleLines = contentLines[startLine:endLine]
+	}
+
+	// Add scroll indicators
+	if scrollPos > 0 {
+		visibleLines[0] = scrollHintStyle.Render("^ K to scroll up")
+	}
+	if endLine < totalLines {
+		for len(visibleLines) < panelHeight-1 {
+			visibleLines = append(visibleLines, "")
+		}
+		visibleLines = append(visibleLines, scrollHintStyle.Render("v J to scroll down"))
+	}
+
+	// Pad to fit panel height
+	for len(visibleLines) < panelHeight {
+		visibleLines = append(visibleLines, "")
+	}
+
+	return strings.Join(visibleLines, "\n")
 }
 
 // neighbor represents a neighboring point with its similarity score.
@@ -868,22 +910,22 @@ func (model Model) initializeCanvasGrid(canvasWidth, canvasHeight int) [][]canva
 // defineCanvasStyles creates all the styles used for rendering the canvas.
 func (model Model) defineCanvasStyles() canvasStyles {
 	return canvasStyles{
-		selectedDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true),   // Orange for selected dot
-		selectedLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("118")).Bold(true),   // Green for selected word
-		currentStyle:       lipgloss.NewStyle().Foreground(lipgloss.Color("213")),              // Pink for current input
-		normalStyle:        lipgloss.NewStyle().Foreground(lipgloss.Color("239")),              // Dim gray for unselected
-		lineStyle:          lipgloss.NewStyle().Foreground(lipgloss.Color("117")),              // Light blue for connector dots
-		neighborDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true),   // Pink for neighbor dots
-		neighborLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true),   // Yellow for neighbor words
+		selectedDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAF00")).Bold(true),
+		selectedLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#87FF00")).Bold(true),
+		currentStyle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#FF87FF")),
+		normalStyle:        lipgloss.NewStyle().Foreground(lipgloss.Color("#4E4E4E")),
+		lineStyle:          lipgloss.NewStyle().Foreground(lipgloss.Color("#87D7FF")),
+		neighborDotStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#FF87FF")).Bold(true),
+		neighborLabelStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF87")).Bold(true),
 		clusterColors: []lipgloss.Color{
-			"196", // Red
-			"46",  // Green
-			"21",  // Blue
-			"226", // Yellow
-			"201", // Magenta
-			"51",  // Cyan
-			"208", // Orange
-			"129", // Purple
+			"#FF0000",
+			"#00FF00",
+			"#0000FF",
+			"#FFFF00",
+			"#FF00FF",
+			"#00FFFF",
+			"#FF8700",
+			"#AF00FF",
 		},
 	}
 }
@@ -1143,18 +1185,20 @@ func (model Model) renderGridPointsWithLabels(canvasGrid [][]canvasCell, gridPoi
 			}
 		}
 
-		// Truncate and render the label next to the marker
-		labelText := point.label
-		if len(labelText) > 12 {
-			labelText = labelText[:12]
-		}
-		labelStartColumn := point.columnIndex + len(markerRunes) + 1
-		if point.isSelected {
-			labelStartColumn = point.columnIndex + 3
-		}
-		for characterOffset, labelCharacter := range labelText {
-			if labelStartColumn+characterOffset < canvasWidth {
-				canvasGrid[point.rowIndex][labelStartColumn+characterOffset] = canvasCell{char: labelCharacter, style: labelStyle}
+		// Truncate and render the label next to the marker (if labels are enabled)
+		if model.showLabels {
+			labelText := point.label
+			if len(labelText) > 12 {
+				labelText = labelText[:12]
+			}
+			labelStartColumn := point.columnIndex + len(markerRunes) + 1
+			if point.isSelected {
+				labelStartColumn = point.columnIndex + 3
+			}
+			for characterOffset, labelCharacter := range labelText {
+				if labelStartColumn+characterOffset < canvasWidth {
+					canvasGrid[point.rowIndex][labelStartColumn+characterOffset] = canvasCell{char: labelCharacter, style: labelStyle}
+				}
 			}
 		}
 	}
