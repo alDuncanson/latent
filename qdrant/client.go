@@ -34,7 +34,10 @@ type Point struct {
 // It initializes the gRPC connection and ensures the target collection exists,
 // creating it with cosine distance if necessary.
 func NewClient(address, collectionName string, vectorSize uint64) (*Client, error) {
-	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	connection, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(64*1024*1024)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to qdrant: %w", err)
 	}
