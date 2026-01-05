@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -23,7 +24,7 @@ const (
 type viewTab int
 
 const (
-	tabVisualization viewTab = iota
+	tabProjection viewTab = iota
 	tabList
 	tabStats
 )
@@ -132,9 +133,9 @@ func (m Model) renderTabBar(s styles, width int) string {
 		name string
 		tab  viewTab
 	}{
-		{"Visualization", tabVisualization},
-		{"List", tabList},
-		{"Stats", tabStats},
+		{"projection", tabProjection},
+		{"list", tabList},
+		{"stats", tabStats},
 	}
 
 	var parts []string
@@ -163,10 +164,26 @@ func (m Model) renderContentArea(s styles, layout layoutDimensions) string {
 	canvasInnerWidth := layout.canvasWidth - borderSize
 	canvasInnerHeight := layout.canvasHeight - borderSize
 
-	canvasContent := m.renderCanvas(canvasInnerWidth, canvasInnerHeight)
+	var content string
+	switch m.activeTab {
+	case tabProjection:
+		content = m.renderProjectionTab(s, layout, canvasInnerWidth, canvasInnerHeight)
+	case tabList:
+		content = m.renderListTab(s, canvasInnerWidth, canvasInnerHeight)
+	case tabStats:
+		content = m.renderStatsTab(s, canvasInnerWidth, canvasInnerHeight)
+	default:
+		content = m.renderProjectionTab(s, layout, canvasInnerWidth, canvasInnerHeight)
+	}
+
+	return content
+}
+
+func (m Model) renderProjectionTab(s styles, layout layoutDimensions, width, height int) string {
+	canvasContent := m.renderCanvas(width, height)
 	canvasBox := s.canvas.
-		Width(canvasInnerWidth).
-		Height(canvasInnerHeight).
+		Width(width).
+		Height(height).
 		Render(canvasContent)
 
 	showPanel := m.showMetadata && m.selectedIndex >= 0 && m.selectedIndex < len(m.storedPoints)
@@ -179,6 +196,128 @@ func (m Model) renderContentArea(s styles, layout layoutDimensions) string {
 	}
 
 	return canvasBox
+}
+
+func (m Model) renderListTab(s styles, width, height int) string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF87D7"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C"))
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EEEEEE"))
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF8700")).Bold(true)
+
+	var lines []string
+	lines = append(lines, headerStyle.Render("stored embeddings"))
+	lines = append(lines, "")
+
+	if len(m.storedPoints) == 0 {
+		lines = append(lines, dimStyle.Render("no embeddings stored yet"))
+		lines = append(lines, dimStyle.Render("press I to add one"))
+	} else {
+		maxVisible := height - 4
+		startIdx := 0
+		if m.selectedIndex > maxVisible-1 {
+			startIdx = m.selectedIndex - maxVisible + 1
+		}
+
+		for i := startIdx; i < len(m.storedPoints) && i-startIdx < maxVisible; i++ {
+			point := m.storedPoints[i]
+			text := point.Text
+			if len(text) > width-6 {
+				text = text[:width-9] + "..."
+			}
+
+			prefix := "  "
+			lineStyle := textStyle
+			if i == m.selectedIndex {
+				prefix = "> "
+				lineStyle = selectedStyle
+			}
+
+			lines = append(lines, lineStyle.Render(prefix+text))
+		}
+
+		if len(m.storedPoints) > maxVisible {
+			lines = append(lines, "")
+			lines = append(lines, dimStyle.Render("use arrow keys to scroll"))
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+	return s.canvas.
+		Width(width).
+		Height(height).
+		Render(content)
+}
+
+func (m Model) renderStatsTab(s styles, width, height int) string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF87D7"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C"))
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EEEEEE"))
+
+	var lines []string
+	lines = append(lines, headerStyle.Render("collection stats"))
+	lines = append(lines, "")
+
+	lines = append(lines, labelStyle.Render("total embeddings: ")+valueStyle.Render(fmt.Sprintf("%d", len(m.storedPoints))))
+
+	if len(m.storedPoints) > 0 {
+		var totalLength int
+		var minLen, maxLen int = len(m.storedPoints[0].Text), len(m.storedPoints[0].Text)
+		for _, p := range m.storedPoints {
+			textLen := len(p.Text)
+			totalLength += textLen
+			if textLen < minLen {
+				minLen = textLen
+			}
+			if textLen > maxLen {
+				maxLen = textLen
+			}
+		}
+		avgLen := totalLength / len(m.storedPoints)
+
+		lines = append(lines, "")
+		lines = append(lines, headerStyle.Render("text lengths"))
+		lines = append(lines, labelStyle.Render("min: ")+valueStyle.Render(fmt.Sprintf("%d chars", minLen)))
+		lines = append(lines, labelStyle.Render("max: ")+valueStyle.Render(fmt.Sprintf("%d chars", maxLen)))
+		lines = append(lines, labelStyle.Render("avg: ")+valueStyle.Render(fmt.Sprintf("%d chars", avgLen)))
+
+		if len(m.storedPoints[0].Vector) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, headerStyle.Render("vector info"))
+			lines = append(lines, labelStyle.Render("dimensions: ")+valueStyle.Render(fmt.Sprintf("%d", len(m.storedPoints[0].Vector))))
+		}
+
+		if m.showClusters && len(m.clusterLabels) > 0 {
+			clusterCounts := make(map[int]int)
+			noiseCount := 0
+			for _, label := range m.clusterLabels {
+				if label < 0 {
+					noiseCount++
+				} else {
+					clusterCounts[label]++
+				}
+			}
+			numClusters := len(clusterCounts)
+
+			lines = append(lines, "")
+			lines = append(lines, headerStyle.Render("clustering"))
+			lines = append(lines, labelStyle.Render("clusters found: ")+valueStyle.Render(fmt.Sprintf("%d", numClusters)))
+			lines = append(lines, labelStyle.Render("noise points: ")+valueStyle.Render(fmt.Sprintf("%d", noiseCount)))
+		}
+
+		projMethod := "PCA"
+		if m.useUMAP {
+			projMethod = "UMAP"
+		}
+		lines = append(lines, "")
+		lines = append(lines, headerStyle.Render("projection"))
+		lines = append(lines, labelStyle.Render("method: ")+valueStyle.Render(projMethod))
+	}
+
+	content := strings.Join(lines, "\n")
+	return s.canvas.
+		Width(width).
+		Height(height).
+		Render(content)
 }
 
 func (m Model) overlayMetadataPanel(base string, s styles, layout layoutDimensions) string {

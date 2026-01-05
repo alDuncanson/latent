@@ -313,7 +313,7 @@ func (model Model) handleNormalModeKey(keyMessage tea.KeyMsg) (tea.Model, tea.Cm
 		}
 
 	case "1":
-		model.activeTab = tabVisualization
+		model.activeTab = tabProjection
 
 	case "2":
 		model.activeTab = tabList
